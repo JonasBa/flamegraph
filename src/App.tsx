@@ -13,6 +13,8 @@ class Flamegraph {
 
     canvas.width = 600;
     canvas.height = 400;
+
+    this.render();
   }
 
   dispose() {
@@ -25,8 +27,36 @@ class Flamegraph {
       return;
     }
 
-    this.ctx.fillStyle = 'red';
-    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    const canvas = [
+      600, 0, 0,
+      0, 400, 0,
+      0, 0, 1,
+    ]
+
+    const time = [
+      100, 0, 0,
+      0, 1, 0, 
+      0, 0, 1,
+    ]
+
+    const timeToCanvas = [
+      canvas[0] / time[0] , 0, 0,
+      0, 400, 0,
+      0, 0, 1,
+    ]
+
+    const rectangles = [
+      [0, 50]
+    ]
+
+    for(const rect of rectangles) {
+      this.ctx.fillStyle = 'red';
+
+      const x = timeToCanvas[0] * rect[0];
+      const width = timeToCanvas[0] * rect[1];
+
+      this.ctx.fillRect(0, 0, width, 10);
+    }
   }
 }
 
