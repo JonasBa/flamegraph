@@ -92,8 +92,9 @@ class Flamegraph {
       const x = timeToCanvasDPR[0] * span.start;
       const y = span.depth * 10 * dprMatrix[4];
       const width = timeToCanvasDPR[0] * span.duration;
+      const height = 10 * dprMatrix[4];
 
-      this.ctx.fillRect(x, y, width, 10 * dprMatrix[4]);
+      this.ctx.fillRect(x, y, width, height);
     }
   }
 }
