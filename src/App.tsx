@@ -153,7 +153,8 @@ function App() {
 
   const onCanvasMouseMove = (e) => {
     if(!flamegraph.current || !cursorRef.current) return;
-    const position = flamegraph.current.getCursorPosition(e.clientX, e.clientY);
+    const rect = e.currentTarget.getBoundingClientRect();
+    const position = flamegraph.current.getCursorPosition(e.clientX - rect.left, e.clientY - rect.top);
     if(!position) cursorRef.current.innerText = 'Cursor: <failed to compute>';
     else cursorRef.current.innerText = `Cursor: ${position[0].toFixed(2)}, ${position[1].toFixed(2)}`;
   }
