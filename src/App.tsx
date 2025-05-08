@@ -4,8 +4,14 @@ import { useRef } from 'react';
 
 const trace = [
   {
+    depth: 0,
     start: 0,
-    duration: 400
+    duration: 100
+  },
+  {
+    depth: 1,
+    start: 0,
+    duration: 50
   },
 ]
 
@@ -60,7 +66,7 @@ class Flamegraph {
     ]
 
     const traceMatrix = [
-      400, 0, 0,
+      100, 0, 0,
       0, 1, 0, 
       0, 0, 1,
     ]
@@ -79,13 +85,15 @@ class Flamegraph {
 
     const timeToCanvasDPR = mat3mul(timeToCanvas, dprMatrix);
 
-    for(const span of trace) {
-      this.ctx.fillStyle = 'red';
+    for(let i = 0; i < trace.length; i++) {
+      const span = trace[i];
+      this.ctx.fillStyle = i % 2 === 0 ? 'red' : 'blue';
 
       const x = timeToCanvasDPR[0] * span.start;
+      const y = span.depth * 10 * dprMatrix[4];
       const width = timeToCanvasDPR[0] * span.duration;
 
-      this.ctx.fillRect(x, 0, width, 10 * dprMatrix[4]);
+      this.ctx.fillRect(x, y, width, 10 * dprMatrix[4]);
     }
   }
 }
