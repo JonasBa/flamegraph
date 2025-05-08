@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { Fragment } from 'react';
 import './App.css'
 import { useRef } from 'react';
 
@@ -60,7 +60,7 @@ class Flamegraph {
     ]
 
     const traceMatrix = [
-      100, 0, 0,
+      400, 0, 0,
       0, 1, 0, 
       0, 0, 1,
     ]
@@ -103,7 +103,24 @@ function App() {
   }
 
   return (
-      <canvas ref={callbackRef}></canvas>
+    <Fragment>
+      <canvas ref={callbackRef} style={{border: '1px solid gray'}}></canvas>
+      <div style={{
+        position:'fixed',
+        top:0,
+        right:0,
+        width:'100px',
+        height:'auto',
+        backgroundColor:'black',
+        fontSize:'12px',
+        color:'white',
+        fontFamily:'monospace',
+        padding: 8,
+        }}>
+          Debug things
+      </div>
+    </Fragment>
+
   )
 }
 
