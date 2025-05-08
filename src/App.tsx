@@ -60,7 +60,8 @@ class Flamegraph {
 
   canvasMatrix: Mat3;
   traceMatrix: Mat3;
-  timeToCanvas: Mat3;
+  viewMatrix: Mat3;
+  traceToCanvas: Mat3;
   dprMatrix: Mat3;
   timeToCanvasDPR: Mat3;
 
@@ -86,8 +87,20 @@ class Flamegraph {
       0, 0, 1,
     ]
 
-    this.timeToCanvas = [
-      this.canvasMatrix[0] / this.traceMatrix[0] , 0, 0,
+    this.viewMatrix = [
+      100, 0, 0,
+      0, 1, 0,
+      0, 0, 1,
+    ]
+
+    const viewToTrace = [
+      this.traceMatrix[0] * this.viewMatrix[0] / this.traceMatrix[0], 0, 0,
+      0, this.traceMatrix[1] * this.viewMatrix[1] / this.traceMatrix[1], 0,
+      0, 0, 1,
+    ]
+
+    this.traceToCanvas = [
+      this.canvasMatrix[0] / viewToTrace[0] , 0, 0,
       0, 400, 0,
       0, 0, 1,
     ]
@@ -98,7 +111,7 @@ class Flamegraph {
       0, 0, 1,
     ]
 
-    this.timeToCanvasDPR = mat3mul(this.timeToCanvas, this.dprMatrix);
+    this.timeToCanvasDPR = mat3mul(this.traceToCanvas, this.dprMatrix);
     this.render();
   }
 
