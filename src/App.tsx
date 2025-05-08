@@ -35,6 +35,7 @@ class Flamegraph {
     canvas.style.width = '600px';
     canvas.style.height = '400px';
 
+    // Denotes x, y, width, height
     this.view = [0, 0, 100, 1];
     this.trace = [0, 0, 100, 1];
 
@@ -80,9 +81,9 @@ class Flamegraph {
       this.ctx.fillStyle = i % 2 === 0 ? 'red' : 'blue';
 
       const x = this.mvpMatrix[6] + this.mvpMatrix[0] * span.start;
-      const y = span.depth * 10 * this.mvpMatrix[4];
+      const y = span.depth * 20 * this.mvpMatrix[4];
       const width = this.mvpMatrix[0] * span.duration;
-      const height = 10 * this.mvpMatrix[4];
+      const height = 20 * this.mvpMatrix[4];
 
       this.ctx.fillRect(x, y, width, height);
     }
