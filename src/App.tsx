@@ -121,7 +121,6 @@ class Flamegraph {
   }
 }
 
-
 function App() {
   const flamegraph = useRef<Flamegraph | null>(null);
   const cursorRef = useRef<HTMLDivElement | null>(null);
@@ -203,6 +202,30 @@ function App() {
         flamegraph.current.render();
         rerender((prev) => prev + 1);
       }}>-y</button>
+
+      <button onClick={() => {
+        if(!flamegraph.current) return;
+        flamegraph.current.transformView(mat3.fromValues(
+          0.9, 0, 0,
+          0, 1, 0,
+          0, 0, 1,
+        ));
+        flamegraph.current.render();
+        rerender((prev) => prev + 1);
+      }}>+ scale x</button>
+
+      <button onClick={() => {
+        if(!flamegraph.current) return;
+        flamegraph.current.transformView(mat3.fromValues(
+          1.1, 0, 0,
+          0, 1, 0,
+          0, 0, 1,
+        ));
+        flamegraph.current.render();
+        rerender((prev) => prev + 1);
+      }}>- scale x</button>
+      
+      
       </div>
       <div style={{
         position:'fixed',
