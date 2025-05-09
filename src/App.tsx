@@ -15,6 +15,11 @@ const trace = [
     duration: 50
   },
 ]
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(value, max));
+}
+
 class Flamegraph {
   canvas: HTMLCanvasElement | null;
   ctx: CanvasRenderingContext2D | null;
@@ -62,6 +67,11 @@ class Flamegraph {
       this.view[2] * mat[0] + this.view[3] * mat[3],
       this.view[2] * mat[1] + this.view[3] * mat[4],
     ]
+
+    this.view[0] = clamp(this.view[0], 0, this.trace[2] - this.view[2]);
+    this.view[1] = clamp(this.view[1], 0, this.trace[3] - this.view[3]);
+    this.view[2] = clamp(this.view[2], 1, this.trace[2]);
+    this.view[3] = clamp(this.view[3], 400/20, 400/20);
 
     this.viewMatrix = mat3.fromValues(
       this.trace[2] / this.view[2], 0, 0,
