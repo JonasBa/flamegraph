@@ -25,6 +25,7 @@ class Flamegraph {
   viewMatrix: mat3;
   projectionMatrix: mat3;
   mvpMatrix: mat3;
+
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
@@ -35,14 +36,13 @@ class Flamegraph {
     canvas.style.width = '600px';
     canvas.style.height = '400px';
 
-    // Denotes x, y, width, height
-    this.view = [0, 0, 100, 400/20];
+    this.view = [25, 0, 100, 400/20];
     this.trace = [0, 0, 100, 2];
 
     this.viewMatrix = mat3.fromValues(
       this.trace[2] / this.view[2], 0, 0,
       0, 1, 0,
-      this.view[0] * this.trace[2] / this.view[2], this.view[1] * this.trace[3] / this.view[3], 1,
+      -(this.view[0] * this.trace[2] / this.view[2]), this.view[1] * this.trace[3] / this.view[3], 1,
     );
 
     this.projectionMatrix = mat3.fromValues(
@@ -115,7 +115,6 @@ function App() {
   }
 
   const onCanvasMouseLeave = () => {
-
     if(!cursorRef.current) return;
     cursorRef.current.innerText = 'Cursor: <outside>';
   }
