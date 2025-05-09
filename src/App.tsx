@@ -41,13 +41,13 @@ class Flamegraph {
 
     this.viewMatrix = mat3.fromValues(
       this.trace[2] / this.view[2], 0, 0,
-      0, 1, 0,
+      0, this.trace[3] / this.view[3], 0,
       -(this.view[0] * this.trace[2] / this.view[2]), this.view[1] * this.trace[3] / this.view[3], 1,
     );
 
     this.projectionMatrix = mat3.fromValues(
       600 / this.trace[2] * window.devicePixelRatio, 0, 0,
-      0, this.view[3] * window.devicePixelRatio, 0,
+      0, 400 / this.trace[3] * window.devicePixelRatio, 0,
       0, 0, 1,
     );
 
@@ -65,7 +65,7 @@ class Flamegraph {
 
     this.viewMatrix = mat3.fromValues(
       this.trace[2] / this.view[2], 0, 0,
-      0, 1, 0,
+      0, this.trace[3] / this.view[3], 0,
       -(this.view[0] * this.trace[2] / this.view[2]), -(this.view[1] * this.trace[3] / this.view[3]), 1,
     );
 
@@ -76,7 +76,6 @@ class Flamegraph {
   getCursorPosition(x: number, y: number): [number, number] | null {
     if(!this.ctx || !this.canvas) return null;
 
-    // Convert to same coordinate system as the canvas
     x *= window.devicePixelRatio;
     y *= window.devicePixelRatio;
 
@@ -128,7 +127,7 @@ function App() {
     const rect = e.currentTarget.getBoundingClientRect();
     const position = flamegraph.current.getCursorPosition(e.clientX - rect.left, e.clientY - rect.top);
     if(!position) cursorRef.current.innerText = 'Cursor: <failed to compute>';
-    else cursorRef.current.innerText = `Cursor: ${position[0].toFixed(2)}, ${position[1].toFixed(2)}`;
+    else cursorRef.current.innerText = `Cursor: ${position[0].toFixed(1)}, ${position[1].toFixed(1)}`;
   }
 
   const onCanvasMouseLeave = () => {
@@ -137,7 +136,8 @@ function App() {
   }
 
   if(viewRef.current) {
-    viewRef.current.innerText = `View: ${flamegraph.current?.view.map(v => v.toFixed(2)).join(', ')}`;
+    viewRef.current.innerText = `View: ${flamegraph.current?.view.map(v => v.toFixed(1)).join(', ')}
+    Trace: ${flamegraph.current?.trace.map(v => v.toFixed(1)).join(', ')}`;
   }
 
   const [_, rerender] = useState(0);
