@@ -1,4 +1,4 @@
-import React, { Fragment } from 'react';
+import React, { Fragment, useState, useCallback } from 'react';
 import './App.css'
 import { useRef } from 'react';
 import { mat3 } from 'gl-matrix';
@@ -36,7 +36,7 @@ class Flamegraph {
     canvas.style.width = '600px';
     canvas.style.height = '400px';
 
-    this.view = [25, 0, 100, 400/20];
+    this.view = [0, 0, 100, 400/20];
     this.trace = [0, 0, 100, 2];
 
     this.viewMatrix = mat3.fromValues(
@@ -55,6 +55,24 @@ class Flamegraph {
     this.render();
   }
 
+  transformView(mat: mat3) {
+    this.view = [
+      this.view[0] * mat[0] + this.view[1] * mat[3] + mat[6],
+      this.view[0] * mat[1] + this.view[1] * mat[4] + mat[7],
+      this.view[2] * mat[0] + this.view[3] * mat[3],
+      this.view[2] * mat[1] + this.view[3] * mat[4],
+    ]
+
+    this.viewMatrix = mat3.fromValues(
+      this.trace[2] / this.view[2], 0, 0,
+      0, 1, 0,
+      -(this.view[0] * this.trace[2] / this.view[2]), -(this.view[1] * this.trace[3] / this.view[3]), 1,
+    );
+
+    this.mvpMatrix = mat3.multiply(mat3.create(), this.projectionMatrix, this.viewMatrix);
+    this.render();
+  }
+
   getCursorPosition(x: number, y: number): [number, number] | null {
     if(!this.ctx || !this.canvas) return null;
 
@@ -65,23 +83,22 @@ class Flamegraph {
     const unproject = mat3.invert(mat3.create(), this.mvpMatrix);
 
     return[
-      (unproject[0] * x - unproject[6]),
-      (unproject[4] * y - unproject[7])
+      (unproject[0] * x + unproject[6]),
+      (unproject[4] * y + unproject[7])
     ]
   }
   
-
   render() {
-    if (!this.ctx || !this.canvas) {
-      return;
-    }
+    if (!this.ctx || !this.canvas) return;
+
+    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
     for(let i = 0; i < trace.length; i++) {
       const span = trace[i];
       this.ctx.fillStyle = i % 2 === 0 ? 'red' : 'blue';
 
       const x = this.mvpMatrix[6] + this.mvpMatrix[0] * span.start;
-      const y = span.depth * this.mvpMatrix[4];
+      const y = this.mvpMatrix[4] * span.depth + this.mvpMatrix[7];
       const width = this.mvpMatrix[0] * span.duration;
       const height = this.mvpMatrix[4];
 
@@ -101,10 +118,10 @@ function App() {
   const cursorRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<HTMLDivElement | null>(null);
 
-  function canvasCallbackRef(canvas) {
+  const canvasCallbackRef = useCallback((canvas: HTMLCanvasElement) => {
     if (canvas) flamegraph.current = new Flamegraph(canvas);
     else flamegraph.current?.dispose();
-  }
+  }, []);
 
   const onCanvasMouseMove = (e) => {
     if(!flamegraph.current || !cursorRef.current) return;
@@ -123,6 +140,8 @@ function App() {
     viewRef.current.innerText = `View: ${flamegraph.current?.view.map(v => v.toFixed(2)).join(', ')}`;
   }
 
+  const [_, rerender] = useState(0);
+
   return (
     <Fragment>
       <canvas 
@@ -131,6 +150,50 @@ function App() {
         onMouseLeave={onCanvasMouseLeave}
         style={{border: '1px solid gray'}}>
       </canvas>
+      <div>
+      <button onClick={() => {
+        if(!flamegraph.current) return;
+        flamegraph.current.transformView(mat3.fromValues(
+          1, 0, 0,
+          0, 1, 0,
+          1, 0, 1,
+        ));
+        flamegraph.current.render();
+        rerender((prev) => prev + 1);
+      }}>
+        +x
+      </button>
+      <button onClick={() => {
+        if(!flamegraph.current) return;
+        flamegraph.current.transformView(mat3.fromValues(
+          1, 0, 0,
+          0, 1, 0,
+          -1, 0, 1,
+        ));
+        flamegraph.current.render();
+        rerender((prev) => prev + 1);
+      }}>-x</button>
+      <button onClick={() => {
+        if(!flamegraph.current) return;
+        flamegraph.current.transformView(mat3.fromValues(
+          1, 0, 0,
+          0, 1, 0,
+          0, 1, 1,
+        ));
+        flamegraph.current.render();
+        rerender((prev) => prev + 1);
+      }}>+y</button>
+      <button onClick={() => {
+        if(!flamegraph.current) return;
+        flamegraph.current.transformView(mat3.fromValues(
+          1, 0, 0,
+          0, 1, 0,
+          0, -1, 1,
+        ));
+        flamegraph.current.render();
+        rerender((prev) => prev + 1);
+      }}>-y</button>
+      </div>
       <div style={{
         position:'fixed',
         top:0,
