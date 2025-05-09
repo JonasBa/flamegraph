@@ -36,18 +36,18 @@ class Flamegraph {
     canvas.style.height = '400px';
 
     // Denotes x, y, width, height
-    this.view = [0, 0, 100, 1];
-    this.trace = [0, 0, 100, 1];
+    this.view = [0, 0, 100, 400/20];
+    this.trace = [0, 0, 100, 2];
 
     this.viewMatrix = mat3.fromValues(
       this.trace[2] / this.view[2], 0, 0,
-      0, this.trace[3] / this.view[3], 0,
+      0, 1, 0,
       this.view[0] * this.trace[2] / this.view[2], this.view[1] * this.trace[3] / this.view[3], 1,
     );
 
     this.projectionMatrix = mat3.fromValues(
       600 / this.trace[2] * window.devicePixelRatio, 0, 0,
-      0, window.devicePixelRatio, 0,
+      0, this.view[3] * window.devicePixelRatio, 0,
       0, 0, 1,
     );
 
@@ -81,9 +81,9 @@ class Flamegraph {
       this.ctx.fillStyle = i % 2 === 0 ? 'red' : 'blue';
 
       const x = this.mvpMatrix[6] + this.mvpMatrix[0] * span.start;
-      const y = span.depth * 20 * this.mvpMatrix[4];
+      const y = span.depth * this.mvpMatrix[4];
       const width = this.mvpMatrix[0] * span.duration;
-      const height = 20 * this.mvpMatrix[4];
+      const height = this.mvpMatrix[4];
 
       this.ctx.fillRect(x, y, width, height);
     }
@@ -99,8 +99,9 @@ class Flamegraph {
 function App() {
   const flamegraph = useRef<Flamegraph | null>(null);
   const cursorRef = useRef<HTMLDivElement | null>(null);
+  const viewRef = useRef<HTMLDivElement | null>(null);
 
-  function callbackRef(canvas) {
+  function canvasCallbackRef(canvas) {
     if (canvas) flamegraph.current = new Flamegraph(canvas);
     else flamegraph.current?.dispose();
   }
@@ -114,14 +115,19 @@ function App() {
   }
 
   const onCanvasMouseLeave = () => {
+
     if(!cursorRef.current) return;
     cursorRef.current.innerText = 'Cursor: <outside>';
+  }
+
+  if(viewRef.current) {
+    viewRef.current.innerText = `View: ${flamegraph.current?.view.map(v => v.toFixed(2)).join(', ')}`;
   }
 
   return (
     <Fragment>
       <canvas 
-        ref={callbackRef} 
+        ref={canvasCallbackRef} 
         onMouseMove={onCanvasMouseMove} 
         onMouseLeave={onCanvasMouseLeave}
         style={{border: '1px solid gray'}}>
@@ -130,7 +136,7 @@ function App() {
         position:'fixed',
         top:0,
         right:0,
-        width:'200px',
+        width:'240px',
         height:'auto',
         backgroundColor:'black',
         fontSize:'12px',
@@ -141,6 +147,7 @@ function App() {
         }}>
           Debug things
           <div ref={cursorRef}/>
+          <div ref={viewRef}/>
       </div>
     </Fragment>
 
