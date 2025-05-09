@@ -205,22 +205,60 @@ function App() {
 
       <button onClick={() => {
         if(!flamegraph.current) return;
-        flamegraph.current.transformView(mat3.fromValues(
+        const centerScale = mat3.create();
+
+        const xCenter = flamegraph.current.view[0] + flamegraph.current.view[2] / 2;
+        const yCenter = flamegraph.current.view[1] + flamegraph.current.view[3] / 2;
+
+        mat3.multiply(centerScale, centerScale, mat3.fromValues(
+          1, 0, 0,
+          0, 1, 0,
+          xCenter, yCenter, 1,
+        ));
+        
+        mat3.multiply(centerScale, centerScale, mat3.fromValues(
           0.9, 0, 0,
           0, 1, 0,
           0, 0, 1,
         ));
+
+        mat3.multiply(centerScale, centerScale, mat3.fromValues(
+          1, 0, 0,
+          0, 1, 0,
+          -xCenter, -yCenter, 1,
+        ));
+
+        flamegraph.current.transformView(centerScale);
         flamegraph.current.render();
         rerender((prev) => prev + 1);
       }}>+ scale x</button>
 
       <button onClick={() => {
         if(!flamegraph.current) return;
-        flamegraph.current.transformView(mat3.fromValues(
+        const centerScale = mat3.create();
+
+        const xCenter = flamegraph.current.view[0] + flamegraph.current.view[2] / 2;
+        const yCenter = flamegraph.current.view[1] + flamegraph.current.view[3] / 2;
+
+        mat3.multiply(centerScale, centerScale, mat3.fromValues(
+          1, 0, 0,
+          0, 1, 0,
+          xCenter, yCenter, 1,
+        ));
+
+        mat3.multiply(centerScale, centerScale, mat3.fromValues(
           1.1, 0, 0,
           0, 1, 0,
           0, 0, 1,
         ));
+
+        mat3.multiply(centerScale, centerScale, mat3.fromValues(
+          1, 0, 0,
+          0, 1, 0,
+          -xCenter, -yCenter, 1,
+        ));
+
+        flamegraph.current.transformView(centerScale);
         flamegraph.current.render();
         rerender((prev) => prev + 1);
       }}>- scale x</button>
