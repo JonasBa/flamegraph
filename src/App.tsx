@@ -3,17 +3,16 @@ import './App.css'
 import { useRef } from 'react';
 import { mat3 } from 'gl-matrix';
 
+function randomBetween(min: number, max: number) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
 const trace = [
-  {
-    depth: 0,
-    start: 0,
-    duration: 100
-  },
-  {
-    depth: 1,
-    start: 0,
-    duration: 50
-  },
+  ...new Array(50).fill(0).map((_, i) => ({
+    depth: i,
+    start: randomBetween(0, 100),
+    duration: randomBetween(1, 100)
+  })),
 ]
 
 function clamp(value: number, min: number, max: number) {
@@ -27,9 +26,9 @@ class Flamegraph {
   view: [number,number,number,number]
   trace: [number, number, number, number]
 
-  viewMatrix: mat3;
-  projectionMatrix: mat3;
-  mvpMatrix: mat3;
+  viewMatrix = mat3.create()
+  projectionMatrix = mat3.create();
+  mvpMatrix = mat3.create()
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -42,7 +41,7 @@ class Flamegraph {
     canvas.style.height = '400px';
 
     this.view = [0, 0, 100, 400/20];
-    this.trace = [0, 0, 100, 2];
+    this.trace = [0, 0, 100, trace.length];
 
     this.viewMatrix = mat3.fromValues(
       this.trace[2] / this.view[2], 0, 0,
@@ -56,7 +55,7 @@ class Flamegraph {
       0, 0, 1,
     );
 
-    this.mvpMatrix = mat3.multiply(mat3.create(), this.projectionMatrix, this.viewMatrix);
+    this.mvpMatrix = mat3.multiply(this.mvpMatrix, this.projectionMatrix, this.viewMatrix);
     this.render();
   }
 
@@ -79,7 +78,7 @@ class Flamegraph {
       -(this.view[0] * this.trace[2] / this.view[2]), -(this.view[1] * this.trace[3] / this.view[3]), 1,
     );
 
-    this.mvpMatrix = mat3.multiply(mat3.create(), this.projectionMatrix, this.viewMatrix);
+    this.mvpMatrix = mat3.multiply(this.mvpMatrix, this.projectionMatrix, this.viewMatrix);
     this.render();
   }
 
@@ -126,8 +125,60 @@ function App() {
   const cursorRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<HTMLDivElement | null>(null);
 
+  document.body.style.overscrollBehavior = 'none';
+
   const canvasCallbackRef = useCallback((canvas: HTMLCanvasElement) => {
-    if (canvas) flamegraph.current = new Flamegraph(canvas);
+    if (canvas) {
+      flamegraph.current = new Flamegraph(canvas);
+
+      canvas.addEventListener('wheel', (e) => {
+        if(!flamegraph.current) return;
+        
+        if(e.metaKey) {
+          const rect = e.target.getBoundingClientRect();
+          const cursorPosition = flamegraph.current.getCursorPosition(e.clientX - rect.left, e.clientY - rect.top);
+          if(!cursorPosition) return;
+
+          const xCenter = cursorPosition[0];
+          const yCenter = cursorPosition[1];
+
+          const centerScale = mat3.create();
+
+          mat3.multiply(centerScale, centerScale, mat3.fromValues(
+            1, 0, 0,
+            0, 1, 0,
+            xCenter, yCenter, 1,
+          ));
+
+          mat3.multiply(centerScale, centerScale, mat3.fromValues(
+            1 + e.deltaY * 0.005, 0, 0,
+            0, 1, 0,
+            0, 0, 1,
+          ));
+
+          mat3.multiply(centerScale, centerScale, mat3.fromValues(
+            1, 0, 0,
+            0, 1, 0,
+            -xCenter, -yCenter, 1,
+          ));
+
+          flamegraph.current.transformView(centerScale);
+          flamegraph.current.render();
+        } else {
+          flamegraph.current.transformView(mat3.fromValues(
+            1, 0, 0,
+            0, 1, 0,
+            e.deltaX * 0.01, e.deltaY * 0.01, 1,
+          ));
+          flamegraph.current.render();
+        }
+
+        if(viewRef.current) {
+          viewRef.current.innerText = `View: ${flamegraph.current?.view.map(v => v.toFixed(1)).join(', ')}
+          Trace: ${flamegraph.current?.trace.map(v => v.toFixed(1)).join(', ')}`;
+        }
+      });
+    }
     else flamegraph.current?.dispose();
   }, []);
 
@@ -157,7 +208,7 @@ function App() {
         ref={canvasCallbackRef} 
         onMouseMove={onCanvasMouseMove} 
         onMouseLeave={onCanvasMouseLeave}
-        style={{border: '1px solid gray'}}>
+        style={{border: '1px solid gray', overscrollBehavior: 'none'}}>
       </canvas>
       <div>
       <button onClick={() => {
@@ -192,6 +243,7 @@ function App() {
         flamegraph.current.render();
         rerender((prev) => prev + 1);
       }}>+y</button>
+
       <button onClick={() => {
         if(!flamegraph.current) return;
         flamegraph.current.transformView(mat3.fromValues(
