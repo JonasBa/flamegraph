@@ -3,17 +3,21 @@ import './App.css'
 import { useRef } from 'react';
 import { mat3 } from 'gl-matrix';
 
-function randomBetween(min: number, max: number) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
+function generateRandomWalk(length: number, startValue: number = 50): { x: number, y: number }[] {
+  const data: { x: number, y: number }[] = [];
+  let currentValue = startValue;
+  
+  for (let i = 0; i < length; i++) {
+    const change = (Math.random() - 0.5) * 4;
+    currentValue += change;
+    currentValue = Math.max(0, Math.min(100, currentValue));
+    data.push({ x: i, y: currentValue });
+  }
+  
+  return data;
 }
 
-const trace = [
-  ...new Array(50).fill(0).map((_, i) => ({
-    depth: i,
-    start: randomBetween(0, 100),
-    duration: randomBetween(1, 100)
-  })),
-]
+const trace = generateRandomWalk(100);
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(value, max));
@@ -25,6 +29,7 @@ class Flamegraph {
   // view: x,y,width,height
   view: [number,number,number,number]
   trace: [number, number, number, number]
+  data: { x: number, y: number }[]
 
   viewMatrix = mat3.create()
   projectionMatrix = mat3.create();
@@ -40,19 +45,20 @@ class Flamegraph {
     canvas.style.width = '600px';
     canvas.style.height = '400px';
 
-    this.view = [0, 0, 100, 400/20];
-    this.trace = [0, 0, 100, trace.length];
+    this.data = generateRandomWalk(100);
+    this.view = [0, 0, this.data.length, 100];
+    this.trace = [0, 0, this.data.length, 100];
 
     this.viewMatrix = mat3.fromValues(
       this.trace[2] / this.view[2], 0, 0,
       0, this.trace[3] / this.view[3], 0,
-      -(this.view[0] * this.trace[2] / this.view[2]), this.view[1] * this.trace[3] / this.view[3], 1,
+      -(this.view[0] * this.trace[2] / this.view[2]), -(this.view[1] * this.trace[3] / this.view[3]), 1,
     );
 
     this.projectionMatrix = mat3.fromValues(
       600 / this.trace[2] * window.devicePixelRatio, 0, 0,
-      0, 400 / this.trace[3] * window.devicePixelRatio, 0,
-      0, 0, 1,
+      0, -400 / this.trace[3] * window.devicePixelRatio, 0,
+      0, 400 * window.devicePixelRatio, 1,
     );
 
     this.mvpMatrix = mat3.multiply(this.mvpMatrix, this.projectionMatrix, this.viewMatrix);
@@ -67,10 +73,10 @@ class Flamegraph {
       this.view[2] * mat[1] + this.view[3] * mat[4],
     ]
 
-    this.view[0] = clamp(this.view[0], 0, this.trace[2] - this.view[2]);
-    this.view[1] = clamp(this.view[1], 0, this.trace[3] - this.view[3]);
-    this.view[2] = clamp(this.view[2], 1, this.trace[2]);
-    this.view[3] = clamp(this.view[3], 400/20, 400/20);
+    this.view[0] = clamp(this.view[0], 0, Math.max(0, this.trace[2] - this.view[2]));
+    this.view[1] = clamp(this.view[1], 0, Math.max(0, this.trace[3] - this.view[3]));
+    this.view[2] = clamp(this.view[2], 10, this.trace[2]);
+    this.view[3] = clamp(this.view[3], 20, this.trace[3]);
 
     this.viewMatrix = mat3.fromValues(
       this.trace[2] / this.view[2], 0, 0,
@@ -101,17 +107,25 @@ class Flamegraph {
 
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
-    for(let i = 0; i < trace.length; i++) {
-      const span = trace[i];
-      this.ctx.fillStyle = i % 2 === 0 ? 'red' : 'blue';
+    if (this.data.length === 0) return;
 
-      const x = this.mvpMatrix[6] + this.mvpMatrix[0] * span.start;
-      const y = this.mvpMatrix[4] * span.depth + this.mvpMatrix[7];
-      const width = this.mvpMatrix[0] * span.duration;
-      const height = this.mvpMatrix[4];
+    this.ctx.strokeStyle = 'blue';
+    this.ctx.lineWidth = 2 * window.devicePixelRatio;
+    this.ctx.beginPath();
 
-      this.ctx.fillRect(x, y, width, height);
+    for(let i = 0; i < this.data.length; i++) {
+      const point = this.data[i];
+      const x = this.mvpMatrix[6] + this.mvpMatrix[0] * point.x;
+      const y = this.mvpMatrix[7] + this.mvpMatrix[4] * point.y;
+
+      if (i === 0) {
+        this.ctx.moveTo(x, y);
+      } else {
+        this.ctx.lineTo(x, y);
+      }
     }
+
+    this.ctx.stroke();
   }
 
   dispose() {
