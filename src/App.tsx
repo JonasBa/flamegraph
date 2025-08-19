@@ -35,7 +35,7 @@ class Flamegraph {
   ctx: CanvasRenderingContext2D | null;
   // view: x,y,width,height
   view: [number,number,number,number]
-  trace: [number, number, number, number]
+  domain: [number, number, number, number]
   data: { x: number, y: number }[]
 
   viewMatrix = mat3.create()
@@ -50,13 +50,15 @@ class Flamegraph {
     x: number
     y: number
   } = {
-    x: 60,
-    y: 60,
+    x: 0,
+    y: 0,
   }
 
   textRenderer: TextRenderer
   textMeasurer: TextMeasurer
   gridRenderer: GridRenderer
+
+  resizeObserver: ResizeObserver
 
   ctxOps: {
     strokeStyle: (v: string, fn: (v: string) => void) => void
@@ -67,27 +69,18 @@ class Flamegraph {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
 
+    if(!this.ctx) throw new Error('Failed to get canvas context');
+
     this.ctxOps = {
       strokeStyle: makeCachedCtxOp<string>(),
       lineWidth: makeCachedCtxOp<number>(),
     }
 
-    if(!this.ctx) throw new Error('Failed to get canvas context');
-
     this.textRenderer = new TextRenderer(this.ctx);
     this.textMeasurer = new TextMeasurer(this.ctx);
     this.gridRenderer = new GridRenderer(this.ctx);
 
-    const canvasWidth = 600;
-    const canvasHeight = 400;
-
-    canvas.width = canvasWidth * window.devicePixelRatio;
-    canvas.height = canvasHeight * window.devicePixelRatio;
-
-    canvas.style.width = `${canvasWidth}px`;
-    canvas.style.height = `${canvasHeight}px`;
-
-    this.data = generateRandomWalkData(20 * 1e6);
+    this.data = generateRandomWalkData(10e6);
 
     let maxY = 0;
     let minY = 0;
@@ -97,30 +90,20 @@ class Flamegraph {
     }
 
     this.view = [0, minY, this.data.length, maxY - minY];
-    this.trace = [0, minY, this.data.length, maxY - minY];
+    this.domain = [0, minY, this.data.length, maxY - minY];
+
+    this.originMatrix = mat3.identity(this.originMatrix);
 
     this.viewMatrix = mat3.fromValues(
-      this.trace[2] / this.view[2], 0, 0,
-      0, this.trace[3] / this.view[3], 0,
-      -(this.view[0] * this.trace[2] / this.view[2]), -(this.view[1] * this.trace[3] / this.view[3]), 1,
+      this.domain[2] / this.view[2], 0, 0,
+      0, this.domain[3] / this.view[3], 0,
+      -(this.view[0] * this.domain[2] / this.view[2]), -(this.view[1] * this.domain[3] / this.view[3]), 1,
     );
 
     this.chartViewMatrix = mat3.fromValues( 
-      this.trace[2] / this.view[2], 0, 0,
-      0, this.trace[3] / this.view[3], 0,
+      this.domain[2] / this.view[2], 0, 0,
+      0, this.domain[3] / this.view[3], 0,
       0, 0, 1,
-    );
-
-    this.projectionMatrix = mat3.fromValues(
-      (canvasWidth - 2 * this.padding.x) / this.trace[2], 0, 0,
-      0, -(canvasHeight - 2 * this.padding.y) / this.trace[3], 0,
-      0, 0, 1,
-    );
-
-    this.originMatrix = mat3.fromValues(
-      1, 0, 0,
-      0, 1, 0,
-      this.padding.x, 400 - this.padding.y, 1,
     );
 
     this.physicalSpaceMatrix = mat3.fromValues(
@@ -129,12 +112,43 @@ class Flamegraph {
       0, 0, 1,
     );
 
-    this.projectionMatrix = mat3.multiply(this.projectionMatrix, this.originMatrix, this.projectionMatrix);
-    this.projectionMatrix = mat3.multiply(this.projectionMatrix, this.physicalSpaceMatrix, this.projectionMatrix);
-    this.viewProjectionMatrix = mat3.multiply(this.viewMatrix, this.projectionMatrix, this.viewMatrix);
-    this.chartViewMatrix = mat3.multiply(this.chartViewMatrix, this.projectionMatrix, this.chartViewMatrix);
+    this.setupResizeObserver();
+  }
 
-    this.render();
+  setupResizeObserver = () => {
+    this.resizeObserver = new ResizeObserver((entries) => {
+      if(!this.canvas) return;
+
+      const rect = entries[0].contentRect;
+
+      this.canvas.width = rect.width * window.devicePixelRatio;
+      this.canvas.height = rect.height * window.devicePixelRatio;
+
+      this.canvas.style.width = `${rect.width}px`;
+      this.canvas.style.height = `${rect.height}px`;
+
+      this.projectionMatrix = mat3.fromValues(
+        (rect.width - 2 * this.padding.x) / this.domain[2], 0, 0,
+        0, -(rect.height - 2 * this.padding.y) / this.domain[3], 0,
+        0, 0, 1,
+      );
+
+      this.originMatrix = mat3.fromValues(
+        1, 0, 0,
+        0, 1, 0,
+        this.padding.x, rect.height - this.padding.y, 1,
+      );
+
+      this.projectionMatrix = mat3.multiply(this.projectionMatrix, this.originMatrix, this.projectionMatrix);
+      this.projectionMatrix = mat3.multiply(this.projectionMatrix, this.physicalSpaceMatrix, this.projectionMatrix);
+
+      this.viewProjectionMatrix = mat3.multiply(this.viewMatrix, this.projectionMatrix, this.viewMatrix);
+      this.chartViewMatrix = mat3.multiply(this.chartViewMatrix, this.projectionMatrix, this.chartViewMatrix);
+
+      this.render();
+    });
+
+    this.resizeObserver.observe(this.canvas!);
   }
 
   transformView(mat: mat3) {
@@ -145,15 +159,15 @@ class Flamegraph {
       this.view[2] * mat[1] + this.view[3] * mat[4],
     ]
 
-    this.view[0] = clamp(this.view[0], 0, Math.max(0, this.trace[2] - this.view[2]));
-    this.view[1] = clamp(this.view[1], 0, Math.max(0, this.trace[3] - this.view[3]));
-    this.view[2] = clamp(this.view[2], 1, this.trace[2]);
-    this.view[3] = clamp(this.view[3], 1, this.trace[3]);
+    this.view[0] = clamp(this.view[0], 0, Math.max(0, this.domain[2] - this.view[2]));
+    this.view[1] = clamp(this.view[1], 0, Math.max(0, this.domain[3] - this.view[3]));
+    this.view[2] = clamp(this.view[2], 1, this.domain[2]);
+    this.view[3] = clamp(this.view[3], 1, this.domain[3]);
 
     this.viewMatrix = mat3.fromValues(
-      this.trace[2] / this.view[2], 0, 0,
-      0, this.trace[3] / this.view[3], 0,
-      -(this.view[0] * this.trace[2] / this.view[2]), -(this.view[1] * this.trace[3] / this.view[3]), 1,
+      this.domain[2] / this.view[2], 0, 0,
+      0, this.domain[3] / this.view[3], 0,
+      -(this.view[0] * this.domain[2] / this.view[2]), -(this.view[1] * this.domain[3] / this.view[3]), 1,
     );
 
     this.viewProjectionMatrix = mat3.multiply(this.viewMatrix, this.projectionMatrix, this.viewMatrix);
@@ -175,16 +189,16 @@ class Flamegraph {
 
   renderAxisGrid() {
     if (!this.ctx || !this.canvas) return;
-    this.ctx.strokeStyle = 'black';
-    this.ctx.lineWidth = 1 * window.devicePixelRatio;
+    this.ctxOps.strokeStyle('black', (v) => this.ctx!.strokeStyle = v);
+    this.ctxOps.lineWidth(1 * window.devicePixelRatio, (v) => this.ctx!.lineWidth = v);
 
      // render the X and Y axis
-     this.ctx.strokeStyle = 'black';
-     this.ctx.lineWidth = 1 * window.devicePixelRatio;
+     this.ctxOps.strokeStyle('black', (v) => this.ctx!.strokeStyle = v);
+     this.ctxOps.lineWidth(1 * window.devicePixelRatio, (v) => this.ctx!.lineWidth = v);
  
      const origin = vec2.fromValues(0,0)
-     const xEnd = vec2.fromValues(this.trace[2], 0)
-     const yEnd = vec2.fromValues(0, this.trace[3])
+     const xEnd = vec2.fromValues(this.domain[2], 0)
+     const yEnd = vec2.fromValues(0, this.domain[3])
  
      const originScreen = vec2.transformMat3(vec2.create(), origin, this.chartViewMatrix)
      const xEndScreen = vec2.transformMat3(vec2.create(), xEnd, this.chartViewMatrix)
@@ -219,8 +233,8 @@ class Flamegraph {
       this.renderAxisGrid();
         
       const origin = vec2.fromValues(0,0)
-      const xEnd = vec2.fromValues(this.trace[2], 0)
-      const yEnd = vec2.fromValues(0, this.trace[3])
+      const xEnd = vec2.fromValues(this.domain[2], 0)
+      const yEnd = vec2.fromValues(0, this.domain[3])
 
       const originScreen = vec2.transformMat3(vec2.create(), origin, this.chartViewMatrix)
       const xEndScreen = vec2.transformMat3(vec2.create(), xEnd, this.chartViewMatrix)
@@ -232,8 +246,7 @@ class Flamegraph {
       
       const min = Math.max(0, binarySearchIndex(this.data, this.view[0]) - 1);
       const max = Math.min(this.data.length, binarySearchIndex(this.data, this.view[0] + this.view[2]) + 1);
-      
-      
+
       this.ctxOps.lineWidth(1 * window.devicePixelRatio, (v) => this.ctx!.lineWidth = v);
       this.ctxOps.strokeStyle('blue', (v) => this.ctx!.strokeStyle = v);
       this.ctx.beginPath();
@@ -268,6 +281,8 @@ class Flamegraph {
   dispose() {
     this.canvas = null;
     this.ctx = null;
+
+    this.resizeObserver.disconnect();
 
     if(typeof this.rafId === 'number'){
       window.cancelAnimationFrame(this.rafId);
@@ -305,6 +320,7 @@ class TextRenderer {
 class TextMeasurer {
   ctx: CanvasRenderingContext2D
   cache: Map<string, number>
+
   constructor(ctx: CanvasRenderingContext2D) {
     this.ctx = ctx;
     this.cache = new Map();
@@ -402,7 +418,7 @@ function App() {
 
         if(viewRef.current) {
           viewRef.current.innerText = `View: ${flamegraph.current?.view.map(v => v.toFixed(1)).join(', ')}
-          Trace: ${flamegraph.current?.trace.map(v => v.toFixed(1)).join(', ')}`;
+          Domain: ${flamegraph.current?.domain.map(v => v.toFixed(1)).join(', ')}`;
         }
       });
     }
@@ -424,20 +440,30 @@ function App() {
 
   if(viewRef.current) {
     viewRef.current.innerText = `View: ${flamegraph.current?.view.map(v => v.toFixed(1)).join(', ')}
-    Trace: ${flamegraph.current?.trace.map(v => v.toFixed(1)).join(', ')}`;
+    domain: ${flamegraph.current?.domain.map(v => v.toFixed(1)).join(', ')}`;
   }
 
   const [_, rerender] = useState(0);
 
   return (
     <Fragment>
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        width: '100%',
+        height: '100%',
+        overscrollBehavior: 'none',
+      }}>
       <canvas 
+        style={{
+          width: '100%',
+          height: '100%',
+        }}
         ref={canvasCallbackRef} 
         onMouseMove={onCanvasMouseMove} 
         onMouseLeave={onCanvasMouseLeave}
-        style={{border: '1px solid gray', overscrollBehavior: 'none'}}>
-      </canvas>
-      <div>
+        />
+      </div>
       <button onClick={() => {
         if(!flamegraph.current) return;
         flamegraph.current.transformView(mat3.fromValues(
@@ -543,7 +569,6 @@ function App() {
       }}>- scale x</button>
       
       
-      </div>
       <div style={{
         position:'fixed',
         top:0,
