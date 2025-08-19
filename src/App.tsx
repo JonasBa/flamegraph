@@ -20,6 +20,16 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(value, max));
 }
 
+function makeCachedCtxOp<T>() {
+  let value: T | null = null;
+
+  return (v, fn: (v: T) => void) => {
+    if(v === value) return;
+    value = v;
+    fn(v);
+  }
+}
+
 class Flamegraph {
   canvas: HTMLCanvasElement | null;
   ctx: CanvasRenderingContext2D | null;
@@ -48,9 +58,19 @@ class Flamegraph {
   textMeasurer: TextMeasurer
   gridRenderer: GridRenderer
 
+  ctxOps: {
+    strokeStyle: (v: string, fn: (v: string) => void) => void
+    lineWidth: (v: number, fn: (v: number) => void) => void
+  }
+
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
+
+    this.ctxOps = {
+      strokeStyle: makeCachedCtxOp<string>(),
+      lineWidth: makeCachedCtxOp<number>(),
+    }
 
     if(!this.ctx) throw new Error('Failed to get canvas context');
 
@@ -58,13 +78,16 @@ class Flamegraph {
     this.textMeasurer = new TextMeasurer(this.ctx);
     this.gridRenderer = new GridRenderer(this.ctx);
 
-    canvas.width = 600 * window.devicePixelRatio;
-    canvas.height = 400 * window.devicePixelRatio;
+    const canvasWidth = 600;
+    const canvasHeight = 400;
 
-    canvas.style.width = '600px';
-    canvas.style.height = '400px';
+    canvas.width = canvasWidth * window.devicePixelRatio;
+    canvas.height = canvasHeight * window.devicePixelRatio;
 
-    this.data = generateRandomWalkData(1e4);
+    canvas.style.width = `${canvasWidth}px`;
+    canvas.style.height = `${canvasHeight}px`;
+
+    this.data = generateRandomWalkData(20 * 1e6);
 
     let maxY = 0;
     let minY = 0;
@@ -89,8 +112,8 @@ class Flamegraph {
     );
 
     this.projectionMatrix = mat3.fromValues(
-      (600 - 2 * this.padding.x) / this.trace[2], 0, 0,
-      0, -(400 - 2 * this.padding.y) / this.trace[3], 0,
+      (canvasWidth - 2 * this.padding.x) / this.trace[2], 0, 0,
+      0, -(canvasHeight - 2 * this.padding.y) / this.trace[3], 0,
       0, 0, 1,
     );
 
@@ -134,21 +157,20 @@ class Flamegraph {
     );
 
     this.viewProjectionMatrix = mat3.multiply(this.viewMatrix, this.projectionMatrix, this.viewMatrix);
-    this.render();
   }
 
-  getCursorPosition(x: number, y: number): [number, number] | null {
+  getCursorPosition(x: number, y: number): vec2 | null {
     if(!this.ctx || !this.canvas) return null;
 
     x *= window.devicePixelRatio;
     y *= window.devicePixelRatio;
 
     const unproject = mat3.invert(mat3.create(), this.viewProjectionMatrix);
+    const vecInLogicalSpace = vec2.fromValues(x, y);
 
-    return[
-      (unproject[0] * x + unproject[6]),
-      (unproject[4] * y + unproject[7])
-    ]
+    vec2.transformMat3(vecInLogicalSpace, vecInLogicalSpace, unproject);
+
+    return vecInLogicalSpace;
   }
 
   renderAxisGrid() {
@@ -178,33 +200,79 @@ class Flamegraph {
      this.ctx.lineTo(yEndScreen[0], yEndScreen[1]);
      this.ctx.stroke();
   }
+
+  rafId: number | null = null;
   
   render() {
-    if (!this.ctx || !this.canvas) return;
-    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    typeof this.rafId === 'number' && window.cancelAnimationFrame(this.rafId);
 
-    if (this.data.length === 0) return;
+    this.rafId = requestAnimationFrame(() => {
+      if (!this.ctx || !this.canvas) return;
 
-    this.ctx.strokeStyle = 'blue';
-    this.ctx.lineWidth = 2 * window.devicePixelRatio;
-    this.ctx.beginPath();
+      this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
-    const min = binarySearchIndex(this.data, this.view[0]);
-    const max = binarySearchIndex(this.data, this.view[0] + this.view[2]);
+      if (this.data.length === 0) return;
 
-    for(let i = min; i < max; i++) {
-      const point = this.data[i];
-      const x = this.viewProjectionMatrix[6] + this.viewProjectionMatrix[0] * point.x;
-      const y = this.viewProjectionMatrix[7] + this.viewProjectionMatrix[4] * point.y; 
-      this.ctx.lineTo(x, y);
-    }
+      const inverse = mat3.invert(mat3.create(), this.viewProjectionMatrix);
+      const pxInConfigSpace = vec2.fromValues(1 * inverse[0], 1 * -inverse[4]);
 
-    this.ctx.stroke();
+      this.renderAxisGrid();
+        
+      const origin = vec2.fromValues(0,0)
+      const xEnd = vec2.fromValues(this.trace[2], 0)
+      const yEnd = vec2.fromValues(0, this.trace[3])
+
+      const originScreen = vec2.transformMat3(vec2.create(), origin, this.chartViewMatrix)
+      const xEndScreen = vec2.transformMat3(vec2.create(), xEnd, this.chartViewMatrix)
+      const yEndScreen = vec2.transformMat3(vec2.create(), yEnd, this.chartViewMatrix)
+      
+      this.ctx.beginPath();
+      this.ctx.rect(originScreen[0], originScreen[1], xEndScreen[0] - originScreen[0], yEndScreen[1] - originScreen[1]);
+      this.ctx.clip();
+      
+      const min = Math.max(0, binarySearchIndex(this.data, this.view[0]) - 1);
+      const max = Math.min(this.data.length, binarySearchIndex(this.data, this.view[0] + this.view[2]) + 1);
+      
+      
+      this.ctxOps.lineWidth(1 * window.devicePixelRatio, (v) => this.ctx!.lineWidth = v);
+      this.ctxOps.strokeStyle('blue', (v) => this.ctx!.strokeStyle = v);
+      this.ctx.beginPath();
+
+      for(let i = min; i < max; i++) {
+        let x = this.data[i].x;
+        let y = this.data[i].y;
+
+        let e = i;
+
+        while(e < max && this.data[e].x - this.data[i].x <= pxInConfigSpace[0]) {
+          x += this.data[e].x;
+          y += this.data[e].y;
+          e++;
+        }
+        
+        // @TODO guard against division by zero - subpx optimization should probably be its own code path
+        x /= e - i;
+        y /= e - i;
+
+        let  xConfig = this.viewProjectionMatrix[6] + this.viewProjectionMatrix[0] * x;
+        let yConfig = this.viewProjectionMatrix[7] + this.viewProjectionMatrix[4] * y; 
+        this.ctx.lineTo(xConfig, yConfig);
+
+        i = e - 1;
+      }
+
+      this.ctx.stroke();
+    });
   }
 
   dispose() {
     this.canvas = null;
     this.ctx = null;
+
+    if(typeof this.rafId === 'number'){
+      window.cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
   }
 }
 
@@ -278,7 +346,7 @@ function App() {
         if(!flamegraph.current) return;
         
         if(e.metaKey) {
-          const rect = e.target.getBoundingClientRect();
+          const rect = e.currentTarget.getBoundingClientRect();
           const cursorPosition = flamegraph.current.getCursorPosition(e.clientX - rect.left, e.clientY - rect.top);
           if(!cursorPosition) return;
 
