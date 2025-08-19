@@ -1,19 +1,20 @@
 import React, { Fragment, useState, useCallback } from 'react';
 import './App.css'
 import { useRef } from 'react';
-import { mat3 } from 'gl-matrix';
+import { mat3, vec2 } from 'gl-matrix';
 
-function randomBetween(min: number, max: number) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
+function generateRandomWalkData(length: number, startValue: number = 50): { x: number, y: number }[] {
+  const data: { x: number, y: number }[] = [];
+  let currentY = startValue;
+  
+  for (let i = 0; i < length; i++) {
+    const randomStep = (Math.random() - 0.5) * 10;
+    currentY = Math.max(1, currentY + randomStep);
+    data.push({ x: i, y: currentY });
+  }
+  
+  return data;
 }
-
-const trace = [
-  ...new Array(50).fill(0).map((_, i) => ({
-    depth: i,
-    start: randomBetween(0, 100),
-    duration: randomBetween(1, 100)
-  })),
-]
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(value, max));
@@ -25,14 +26,37 @@ class Flamegraph {
   // view: x,y,width,height
   view: [number,number,number,number]
   trace: [number, number, number, number]
+  data: { x: number, y: number }[]
 
   viewMatrix = mat3.create()
+  chartViewMatrix = mat3.create()
+
   projectionMatrix = mat3.create();
-  mvpMatrix = mat3.create()
+  viewProjectionMatrix = mat3.create()
+  originMatrix = mat3.create()
+  physicalSpaceMatrix = mat3.create()
+
+  padding: {
+    x: number
+    y: number
+  } = {
+    x: 60,
+    y: 60,
+  }
+
+  textRenderer: TextRenderer
+  textMeasurer: TextMeasurer
+  gridRenderer: GridRenderer
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
+
+    if(!this.ctx) throw new Error('Failed to get canvas context');
+
+    this.textRenderer = new TextRenderer(this.ctx);
+    this.textMeasurer = new TextMeasurer(this.ctx);
+    this.gridRenderer = new GridRenderer(this.ctx);
 
     canvas.width = 600 * window.devicePixelRatio;
     canvas.height = 400 * window.devicePixelRatio;
@@ -40,22 +64,53 @@ class Flamegraph {
     canvas.style.width = '600px';
     canvas.style.height = '400px';
 
-    this.view = [0, 0, 100, 400/20];
-    this.trace = [0, 0, 100, trace.length];
+    this.data = generateRandomWalkData(1e4);
+
+    let maxY = 0;
+    let minY = 0;
+    for(let i = 0; i < this.data.length; i++) {
+      maxY = Math.max(maxY, this.data[i].y);
+      minY = Math.min(minY, this.data[i].y);
+    }
+
+    this.view = [0, minY, this.data.length, maxY - minY];
+    this.trace = [0, minY, this.data.length, maxY - minY];
 
     this.viewMatrix = mat3.fromValues(
       this.trace[2] / this.view[2], 0, 0,
       0, this.trace[3] / this.view[3], 0,
-      -(this.view[0] * this.trace[2] / this.view[2]), this.view[1] * this.trace[3] / this.view[3], 1,
+      -(this.view[0] * this.trace[2] / this.view[2]), -(this.view[1] * this.trace[3] / this.view[3]), 1,
     );
 
-    this.projectionMatrix = mat3.fromValues(
-      600 / this.trace[2] * window.devicePixelRatio, 0, 0,
-      0, 400 / this.trace[3] * window.devicePixelRatio, 0,
+    this.chartViewMatrix = mat3.fromValues( 
+      this.trace[2] / this.view[2], 0, 0,
+      0, this.trace[3] / this.view[3], 0,
       0, 0, 1,
     );
 
-    this.mvpMatrix = mat3.multiply(this.mvpMatrix, this.projectionMatrix, this.viewMatrix);
+    this.projectionMatrix = mat3.fromValues(
+      (600 - 2 * this.padding.x) / this.trace[2], 0, 0,
+      0, -(400 - 2 * this.padding.y) / this.trace[3], 0,
+      0, 0, 1,
+    );
+
+    this.originMatrix = mat3.fromValues(
+      1, 0, 0,
+      0, 1, 0,
+      this.padding.x, 400 - this.padding.y, 1,
+    );
+
+    this.physicalSpaceMatrix = mat3.fromValues(
+      window.devicePixelRatio, 0, 0,
+      0, window.devicePixelRatio, 0,
+      0, 0, 1,
+    );
+
+    this.projectionMatrix = mat3.multiply(this.projectionMatrix, this.originMatrix, this.projectionMatrix);
+    this.projectionMatrix = mat3.multiply(this.projectionMatrix, this.physicalSpaceMatrix, this.projectionMatrix);
+    this.viewProjectionMatrix = mat3.multiply(this.viewMatrix, this.projectionMatrix, this.viewMatrix);
+    this.chartViewMatrix = mat3.multiply(this.chartViewMatrix, this.projectionMatrix, this.chartViewMatrix);
+
     this.render();
   }
 
@@ -67,10 +122,10 @@ class Flamegraph {
       this.view[2] * mat[1] + this.view[3] * mat[4],
     ]
 
-    this.view[0] = clamp(this.view[0], 0, this.trace[2] - this.view[2]);
-    this.view[1] = clamp(this.view[1], 0, this.trace[3] - this.view[3]);
+    this.view[0] = clamp(this.view[0], 0, Math.max(0, this.trace[2] - this.view[2]));
+    this.view[1] = clamp(this.view[1], 0, Math.max(0, this.trace[3] - this.view[3]));
     this.view[2] = clamp(this.view[2], 1, this.trace[2]);
-    this.view[3] = clamp(this.view[3], 400/20, 400/20);
+    this.view[3] = clamp(this.view[3], 1, this.trace[3]);
 
     this.viewMatrix = mat3.fromValues(
       this.trace[2] / this.view[2], 0, 0,
@@ -78,7 +133,7 @@ class Flamegraph {
       -(this.view[0] * this.trace[2] / this.view[2]), -(this.view[1] * this.trace[3] / this.view[3]), 1,
     );
 
-    this.mvpMatrix = mat3.multiply(this.mvpMatrix, this.projectionMatrix, this.viewMatrix);
+    this.viewProjectionMatrix = mat3.multiply(this.viewMatrix, this.projectionMatrix, this.viewMatrix);
     this.render();
   }
 
@@ -88,36 +143,124 @@ class Flamegraph {
     x *= window.devicePixelRatio;
     y *= window.devicePixelRatio;
 
-    const unproject = mat3.invert(mat3.create(), this.mvpMatrix);
+    const unproject = mat3.invert(mat3.create(), this.viewProjectionMatrix);
 
     return[
       (unproject[0] * x + unproject[6]),
       (unproject[4] * y + unproject[7])
     ]
   }
+
+  renderAxisGrid() {
+    if (!this.ctx || !this.canvas) return;
+    this.ctx.strokeStyle = 'black';
+    this.ctx.lineWidth = 1 * window.devicePixelRatio;
+
+     // render the X and Y axis
+     this.ctx.strokeStyle = 'black';
+     this.ctx.lineWidth = 1 * window.devicePixelRatio;
+ 
+     const origin = vec2.fromValues(0,0)
+     const xEnd = vec2.fromValues(this.trace[2], 0)
+     const yEnd = vec2.fromValues(0, this.trace[3])
+ 
+     const originScreen = vec2.transformMat3(vec2.create(), origin, this.chartViewMatrix)
+     const xEndScreen = vec2.transformMat3(vec2.create(), xEnd, this.chartViewMatrix)
+     const yEndScreen = vec2.transformMat3(vec2.create(), yEnd, this.chartViewMatrix)
+ 
+     this.ctx.beginPath();
+     this.ctx.moveTo(originScreen[0], originScreen[1]);
+     this.ctx.lineTo(xEndScreen[0], xEndScreen[1]);
+     this.ctx.stroke();
+ 
+     this.ctx.beginPath();
+     this.ctx.moveTo(originScreen[0], originScreen[1]);
+     this.ctx.lineTo(yEndScreen[0], yEndScreen[1]);
+     this.ctx.stroke();
+  }
   
   render() {
     if (!this.ctx || !this.canvas) return;
-
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
-    for(let i = 0; i < trace.length; i++) {
-      const span = trace[i];
-      this.ctx.fillStyle = i % 2 === 0 ? 'red' : 'blue';
+    if (this.data.length === 0) return;
 
-      const x = this.mvpMatrix[6] + this.mvpMatrix[0] * span.start;
-      const y = this.mvpMatrix[4] * span.depth + this.mvpMatrix[7];
-      const width = this.mvpMatrix[0] * span.duration;
-      const height = this.mvpMatrix[4];
+    this.ctx.strokeStyle = 'blue';
+    this.ctx.lineWidth = 2 * window.devicePixelRatio;
+    this.ctx.beginPath();
 
-      this.ctx.fillRect(x, y, width, height);
+    const min = binarySearchIndex(this.data, this.view[0]);
+    const max = binarySearchIndex(this.data, this.view[0] + this.view[2]);
+
+    for(let i = min; i < max; i++) {
+      const point = this.data[i];
+      const x = this.viewProjectionMatrix[6] + this.viewProjectionMatrix[0] * point.x;
+      const y = this.viewProjectionMatrix[7] + this.viewProjectionMatrix[4] * point.y; 
+      this.ctx.lineTo(x, y);
     }
+
+    this.ctx.stroke();
   }
 
   dispose() {
     this.canvas = null;
     this.ctx = null;
   }
+}
+
+
+class GridRenderer {
+  ctx: CanvasRenderingContext2D
+  constructor(ctx: CanvasRenderingContext2D) {
+    this.ctx = ctx;
+  }
+  
+  render() {
+    this.ctx.strokeStyle = 'black';
+    this.ctx.lineWidth = 1 * window.devicePixelRatio;
+  }
+}
+
+class TextRenderer {
+  ctx: CanvasRenderingContext2D
+  constructor(ctx: CanvasRenderingContext2D) {
+    this.ctx = ctx;
+  }
+
+  render(text: string, x: number, y: number) {
+    this.ctx.fillStyle = 'black';
+    this.ctx.font = '12px monospace';
+    this.ctx.fillText(text, x, y);
+  }
+}
+
+class TextMeasurer {
+  ctx: CanvasRenderingContext2D
+  cache: Map<string, number>
+  constructor(ctx: CanvasRenderingContext2D) {
+    this.ctx = ctx;
+    this.cache = new Map();
+  }
+  
+  measure(text: string) {
+    if(this.cache.has(text)) return this.cache.get(text);
+    const metrics = this.ctx.measureText(text);
+    this.cache.set(text, metrics.width);
+    return metrics.width;
+  }
+}
+
+function binarySearchIndex(data: { x: number, y: number }[], x: number) {
+  let low = 0;
+  let high = data.length - 1;
+  while(low <= high) {
+    // Prevent potential overflow in mid calculation
+    const mid = low + Math.floor((high - low) / 2);
+    if(data[mid].x === x) return mid;
+    if(data[mid].x < x) low = mid + 1;
+    else high = mid - 1;
+  }
+  return low;
 }
 
 function App() {
@@ -150,9 +293,10 @@ function App() {
             xCenter, yCenter, 1,
           ));
 
+          const scaleFactor = 1 + e.deltaY * 0.005;
           mat3.multiply(centerScale, centerScale, mat3.fromValues(
-            1 + e.deltaY * 0.005, 0, 0,
-            0, 1, 0,
+            scaleFactor, 0, 0,
+            0, scaleFactor, 0,
             0, 0, 1,
           ));
 
@@ -165,11 +309,26 @@ function App() {
           flamegraph.current.transformView(centerScale);
           flamegraph.current.render();
         } else {
-          flamegraph.current.transformView(mat3.fromValues(
-            1, 0, 0,
-            0, 1, 0,
-            e.deltaX * 0.01, e.deltaY * 0.01, 1,
-          ));
+          const physicalDelta = vec2.fromValues(e.deltaX, e.deltaY);
+          const physicalToConfig = mat3.invert(
+            mat3.create(),
+            flamegraph.current.viewProjectionMatrix
+          );
+          const [m00, m01, m02, m10, m11, m12] = physicalToConfig;
+
+          const configDelta = vec2.transformMat3(vec2.create(), physicalDelta, [
+            m00!,
+            m01!,
+            m02!,
+            m10!,
+            m11!,
+            m12!,
+            0,
+            0,
+            0,
+          ]);
+
+          flamegraph.current.transformView(mat3.fromTranslation(mat3.create(), configDelta));
           flamegraph.current.render();
         }
 
