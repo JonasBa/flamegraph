@@ -7,10 +7,13 @@ function generateRandomWalkData(length: number, startValue: number = 50): { x: n
   const data: { x: number, y: number }[] = [];
   let currentY = startValue;
   
+  // Start from current timestamp and increment by microseconds for high frequency data
+  const startTimestamp = 0;
+  const microsecondsIncrement = 100; // 100 microseconds between data points (10kHz)
+  
   for (let i = 0; i < length; i++) {
-    const randomStep = (Math.random() - 0.5) * 5;
-    currentY = Math.max(1, currentY + randomStep);
-    data.push({ x: i, y: currentY });
+    currentY = Math.max(1, currentY + (Math.random() - 0.5) * 5);
+    data.push({ x: startTimestamp + (i * microsecondsIncrement / 1000), y: currentY });
   }
   
   return data;
@@ -33,7 +36,6 @@ function makeCachedCtxOp<T>() {
 class Flamegraph {
   canvas: HTMLCanvasElement | null;
   ctx: CanvasRenderingContext2D | null;
-  // view: x,y,width,height
   view: [number,number,number,number]
   domain: [number, number, number, number]
   data: { x: number, y: number }[]
@@ -80,17 +82,21 @@ class Flamegraph {
     this.textMeasurer = new TextMeasurer(this.ctx);
     this.gridRenderer = new GridRenderer(this.ctx);
 
-    this.data = generateRandomWalkData(10e6);
+    this.data = generateRandomWalkData(10 * 1e6);
 
-    let maxY = 0;
-    let minY = 0;
+    let maxY = Number.NEGATIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+
     for(let i = 0; i < this.data.length; i++) {
       maxY = Math.max(maxY, this.data[i].y);
       minY = Math.min(minY, this.data[i].y);
     }
 
-    this.view = [0, minY, this.data.length, maxY - minY];
-    this.domain = [0, minY, this.data.length, maxY - minY];
+    let minX = this.data[0].x;
+    let maxX = this.data[this.data.length - 1].x;
+
+    this.view = [minX, minY, maxX - minX, maxY - minY];
+    this.domain = [minX, minY, maxX - minX, maxY - minY];
 
     this.originMatrix = mat3.identity(this.originMatrix);
 
@@ -148,7 +154,7 @@ class Flamegraph {
       this.render();
     });
 
-    this.resizeObserver.observe(this.canvas!);
+    this.resizeObserver.observe(this.canvas!.parentElement);
   }
 
   transformView(mat: mat3) {
@@ -159,10 +165,7 @@ class Flamegraph {
       this.view[2] * mat[1] + this.view[3] * mat[4],
     ]
 
-    this.view[0] = clamp(this.view[0], 0, Math.max(0, this.domain[2] - this.view[2]));
-    this.view[1] = clamp(this.view[1], 0, Math.max(0, this.domain[3] - this.view[3]));
-    this.view[2] = clamp(this.view[2], 1, this.domain[2]);
-    this.view[3] = clamp(this.view[3], 1, this.domain[3]);
+    this.view = this.clampView(this.view);
 
     this.viewMatrix = mat3.fromValues(
       this.domain[2] / this.view[2], 0, 0,
@@ -174,7 +177,8 @@ class Flamegraph {
   }
 
   setView(view: [number, number, number, number]) {
-    this.view = view;
+    this.view = this.clampView(view);
+
     this.viewMatrix = mat3.fromValues(
       this.domain[2] / this.view[2], 0, 0,
       0, this.domain[3] / this.view[3], 0,
@@ -182,6 +186,15 @@ class Flamegraph {
     );
 
     this.viewProjectionMatrix = mat3.multiply(this.viewMatrix, this.projectionMatrix, this.viewMatrix);
+  }
+
+  clampView(view: [number, number, number, number]): [number, number, number, number] {
+    return [
+      clamp(view[0], this.domain[0], this.domain[2] - view[2]),
+      clamp(view[1], this.domain[1], this.domain[3] - view[3]),
+      clamp(view[2], 1, this.domain[2]),
+      clamp(view[3], 1, this.domain[3]),
+    ];
   }
 
   getCursorPosition(x: number, y: number): vec2 | null {
@@ -401,7 +414,7 @@ function App() {
           flamegraph.current.transformView(centerScale);
           flamegraph.current.render();
         } else {
-          const physicalDelta = vec2.fromValues(e.deltaX, e.deltaY);
+          const physicalDelta = vec2.fromValues(e.deltaX * 0.005, e.deltaY * 0.005);
           const physicalToConfig = mat3.invert(
             mat3.create(),
             flamegraph.current.viewProjectionMatrix
@@ -421,7 +434,11 @@ function App() {
           ]);
 
           flamegraph.current.transformView(mat3.fromTranslation(mat3.create(), configDelta));
-          if(e.deltaX < 0){
+
+          const shouldCheckLeft = e.deltaX < 0 && Math.abs(e.deltaX) > Math.abs(e.deltaY);
+          const shouldCheckRight = e.deltaX > 0 && Math.abs(e.deltaX) > Math.abs(e.deltaY);
+
+          if(shouldCheckLeft){
             const firstLeft = binarySearchIndex(flamegraph.current.data, flamegraph.current.view[0]);
             const leftY = flamegraph.current.data[firstLeft].y;
             if(leftY < flamegraph.current.view[1]){
@@ -433,7 +450,7 @@ function App() {
               // left is above view
               flamegraph.current.setView([flamegraph.current.view[0], leftY - flamegraph.current.view[3], flamegraph.current.view[2], flamegraph.current.view[3]]);
             }
-          } else if(e.deltaX > 0){
+          } else if(shouldCheckRight){
             const firstRight = binarySearchIndex(flamegraph.current.data, flamegraph.current.view[0] + flamegraph.current.view[2]); 
             const rightY = flamegraph.current.data[firstRight].y;
             if(rightY > flamegraph.current.view[1] + flamegraph.current.view[3]){
@@ -469,6 +486,40 @@ function App() {
     cursorRef.current.innerText = 'Cursor: <outside>';
   }
 
+  const startPosition = React.useRef<vec2 | null>(null);
+  const onCanvasMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if(!flamegraph.current) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    startPosition.current = flamegraph.current.getCursorPosition(e.clientX - rect.left, e.clientY - rect.top);
+  }
+
+  const onCanvasMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if(!flamegraph.current) return;
+    if(!startPosition.current) return;
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pos1 = startPosition.current;
+    const pos2 = flamegraph.current.getCursorPosition(e.clientX - rect.left, e.clientY - rect.top);
+
+    if (!pos1 || !pos2) return;
+
+    // Compute the min/max window between the two points
+    const x0 = Math.min(pos1[0], pos2[0]);
+    const y0 = Math.min(pos1[1], pos2[1]);
+    const x1 = Math.max(pos1[0], pos2[0]);
+    const y1 = Math.max(pos1[1], pos2[1]);
+
+    flamegraph.current.setView([
+      x0,
+      y0,
+      x1 - x0,
+      y1 - y0,
+    ]);
+
+    flamegraph.current.render();
+    startPosition.current = null;
+  }
+
   if(viewRef.current) {
     viewRef.current.innerText = `View: ${flamegraph.current?.view.map(v => v.toFixed(1)).join(', ')}
     domain: ${flamegraph.current?.domain.map(v => v.toFixed(1)).join(', ')}`;
@@ -481,19 +532,22 @@ function App() {
       <div style={{
         display: 'flex',
         flexDirection: 'column',
-        width: '100%',
-        height: '100%',
+        width: '700px',
+        height: '400px',
         overscrollBehavior: 'none',
+        marginBottom: 64,
       }}>
       <canvas 
         style={{
           width: '100%',
           height: '100%',
-          marginBottom: 64,
+          position: 'absolute',
         }}
         ref={canvasCallbackRef} 
         onMouseMove={onCanvasMouseMove} 
         onMouseLeave={onCanvasMouseLeave}
+        onMouseDown={onCanvasMouseDown}
+        onMouseUp={onCanvasMouseUp}
         />
       </div>
       <button onClick={() => {
@@ -605,16 +659,16 @@ function App() {
         position:'fixed',
         top:0,
         right:0,
-        width:'240px',
         height:'auto',
         backgroundColor:'black',
         fontSize:'12px',
         color:'white',
         fontFamily:'monospace',
         textAlign:'right',
+        whiteSpace:'nowrap',
         padding: 8,
         }}>
-          Debug things
+          Debug Tools:
           <div ref={cursorRef}/>
           <div ref={viewRef}/>
       </div>
