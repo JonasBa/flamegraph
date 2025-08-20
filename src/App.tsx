@@ -8,7 +8,7 @@ function generateRandomWalkData(length: number, startValue: number = 50): { x: n
   let currentY = startValue;
   
   for (let i = 0; i < length; i++) {
-    const randomStep = (Math.random() - 0.5) * 10;
+    const randomStep = (Math.random() - 0.5) * 5;
     currentY = Math.max(1, currentY + randomStep);
     data.push({ x: i, y: currentY });
   }
@@ -173,6 +173,17 @@ class Flamegraph {
     this.viewProjectionMatrix = mat3.multiply(this.viewMatrix, this.projectionMatrix, this.viewMatrix);
   }
 
+  setView(view: [number, number, number, number]) {
+    this.view = view;
+    this.viewMatrix = mat3.fromValues(
+      this.domain[2] / this.view[2], 0, 0,
+      0, this.domain[3] / this.view[3], 0,
+      -(this.view[0] * this.domain[2] / this.view[2]), -(this.view[1] * this.domain[3] / this.view[3]), 1,
+    );
+
+    this.viewProjectionMatrix = mat3.multiply(this.viewMatrix, this.projectionMatrix, this.viewMatrix);
+  }
+
   getCursorPosition(x: number, y: number): vec2 | null {
     if(!this.ctx || !this.canvas) return null;
 
@@ -253,21 +264,20 @@ class Flamegraph {
 
       for(let i = min; i < max; i++) {
         let x = this.data[i].x;
-        let y = this.data[i].y;
+        let maxY = this.data[i].y;
 
         let e = i;
 
         while(e < max && this.data[e].x - this.data[i].x <= pxInConfigSpace[0]) {
-          x += this.data[e].x;
-          y += this.data[e].y;
+          if (this.data[e].y > maxY) {
+            maxY = this.data[e].y;
+          }
           e++;
         }
         
-        // @TODO guard against division by zero - subpx optimization should probably be its own code path
-        x /= e - i;
-        y /= e - i;
+        let y = maxY;
 
-        let  xConfig = this.viewProjectionMatrix[6] + this.viewProjectionMatrix[0] * x;
+        let xConfig = this.viewProjectionMatrix[6] + this.viewProjectionMatrix[0] * x;
         let yConfig = this.viewProjectionMatrix[7] + this.viewProjectionMatrix[4] * y; 
         this.ctx.lineTo(xConfig, yConfig);
 
@@ -290,7 +300,6 @@ class Flamegraph {
     }
   }
 }
-
 
 class GridRenderer {
   ctx: CanvasRenderingContext2D
@@ -361,14 +370,13 @@ function App() {
       canvas.addEventListener('wheel', (e) => {
         if(!flamegraph.current) return;
         
-        if(e.metaKey) {
+        if(e.metaKey || e.shiftKey) {
           const rect = e.currentTarget.getBoundingClientRect();
           const cursorPosition = flamegraph.current.getCursorPosition(e.clientX - rect.left, e.clientY - rect.top);
           if(!cursorPosition) return;
 
           const xCenter = cursorPosition[0];
           const yCenter = cursorPosition[1];
-
           const centerScale = mat3.create();
 
           mat3.multiply(centerScale, centerScale, mat3.fromValues(
@@ -380,7 +388,7 @@ function App() {
           const scaleFactor = 1 + e.deltaY * 0.005;
           mat3.multiply(centerScale, centerScale, mat3.fromValues(
             scaleFactor, 0, 0,
-            0, scaleFactor, 0,
+            0, e.shiftKey ? 1 : scaleFactor, 0,
             0, 0, 1,
           ));
 
@@ -413,6 +421,29 @@ function App() {
           ]);
 
           flamegraph.current.transformView(mat3.fromTranslation(mat3.create(), configDelta));
+          if(e.deltaX < 0){
+            const firstLeft = binarySearchIndex(flamegraph.current.data, flamegraph.current.view[0]);
+            const leftY = flamegraph.current.data[firstLeft].y;
+            if(leftY < flamegraph.current.view[1]){
+              // left is below view
+              flamegraph.current.setView([flamegraph.current.view[0], leftY, flamegraph.current.view[2], flamegraph.current.view[3]]);
+            } else if(
+              leftY > flamegraph.current.view[1] + flamegraph.current.view[3]
+            ){
+              // left is above view
+              flamegraph.current.setView([flamegraph.current.view[0], leftY - flamegraph.current.view[3], flamegraph.current.view[2], flamegraph.current.view[3]]);
+            }
+          } else if(e.deltaX > 0){
+            const firstRight = binarySearchIndex(flamegraph.current.data, flamegraph.current.view[0] + flamegraph.current.view[2]); 
+            const rightY = flamegraph.current.data[firstRight].y;
+            if(rightY > flamegraph.current.view[1] + flamegraph.current.view[3]){
+              // right is above view
+              flamegraph.current.setView([flamegraph.current.view[0], rightY - flamegraph.current.view[3], flamegraph.current.view[2], flamegraph.current.view[3]]);
+            } else if(rightY < flamegraph.current.view[1]){
+              // right is below view
+              flamegraph.current.setView([flamegraph.current.view[0], rightY, flamegraph.current.view[2], flamegraph.current.view[3]]);
+            }
+          }
           flamegraph.current.render();
         }
 
@@ -458,6 +489,7 @@ function App() {
         style={{
           width: '100%',
           height: '100%',
+          marginBottom: 64,
         }}
         ref={canvasCallbackRef} 
         onMouseMove={onCanvasMouseMove} 
