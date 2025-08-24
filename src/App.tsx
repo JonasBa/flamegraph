@@ -4,7 +4,7 @@ import { useRef } from 'react';
 import { mat3, vec2 } from 'gl-matrix';
 
 function generateRandomWalkData(length: number, startValue: number = 50): { x: number, y: number }[] {
-  const data: { x: number, y: number }[] = [];
+  const data: { x: number, y: number }[] = new Array(length);
   let currentY = startValue;
   
   // Start from current timestamp and increment by microseconds for high frequency data
@@ -12,8 +12,8 @@ function generateRandomWalkData(length: number, startValue: number = 50): { x: n
   const microsecondsIncrement = 100; // 100 microseconds between data points (10kHz)
   
   for (let i = 0; i < length; i++) {
-    currentY = Math.max(1, currentY + (Math.random() - 0.5) * 5);
-    data.push({ x: startTimestamp + (i * microsecondsIncrement / 1000), y: currentY });
+    currentY = Math.max(1, currentY + (Math.random() - 0.5) * 0.5);
+    data[i] = { x: startTimestamp + (i * microsecondsIncrement / 1000), y: currentY };
   }
   
   return data;
@@ -58,13 +58,14 @@ class Flamegraph {
 
   textRenderer: TextRenderer
   textMeasurer: TextMeasurer
-  gridRenderer: GridRenderer
 
   resizeObserver: ResizeObserver
 
   ctxOps: {
     strokeStyle: (v: string, fn: (v: string) => void) => void
     lineWidth: (v: number, fn: (v: number) => void) => void
+    fillStyle: (v: string, fn: (v: string) => void) => void
+    font: (v: string, fn: (v: string) => void) => void
   }
 
   constructor(canvas: HTMLCanvasElement) {
@@ -76,13 +77,14 @@ class Flamegraph {
     this.ctxOps = {
       strokeStyle: makeCachedCtxOp<string>(),
       lineWidth: makeCachedCtxOp<number>(),
+      fillStyle: makeCachedCtxOp<string>(),
+      font: makeCachedCtxOp<string>(),
     }
 
     this.textRenderer = new TextRenderer(this.ctx);
     this.textMeasurer = new TextMeasurer(this.ctx);
-    this.gridRenderer = new GridRenderer(this.ctx);
 
-    this.data = generateRandomWalkData(10 * 1e6);
+    this.data = generateRandomWalkData(40 * 1e6);
 
     let maxY = Number.NEGATIVE_INFINITY;
     let minY = Number.POSITIVE_INFINITY;
@@ -121,7 +123,18 @@ class Flamegraph {
     this.setupResizeObserver();
   }
 
+  overlayCanvas: HTMLCanvasElement | null = null;
+  overlayCtx: CanvasRenderingContext2D | null = null;
+  
   setupResizeObserver = () => {
+    if(!this.overlayCanvas) {
+      this.overlayCanvas = document.createElement('canvas');
+      this.overlayCanvas.style.pointerEvents = 'none';
+      this.overlayCanvas.style.position = 'absolute';
+      this.overlayCtx = this.overlayCanvas.getContext('2d');
+      this.canvas!.parentElement?.appendChild(this.overlayCanvas);
+    }
+
     this.resizeObserver = new ResizeObserver((entries) => {
       if(!this.canvas) return;
 
@@ -132,6 +145,12 @@ class Flamegraph {
 
       this.canvas.style.width = `${rect.width}px`;
       this.canvas.style.height = `${rect.height}px`;
+
+      this.overlayCanvas!.width = rect.width * window.devicePixelRatio;
+      this.overlayCanvas!.height = rect.height * window.devicePixelRatio;
+
+      this.overlayCanvas!.style.width = `${rect.width}px`;
+      this.overlayCanvas!.style.height = `${rect.height}px`;
 
       this.projectionMatrix = mat3.fromValues(
         (rect.width - 2 * this.padding.x) / this.domain[2], 0, 0,
@@ -213,12 +232,81 @@ class Flamegraph {
 
   renderAxisGrid() {
     if (!this.ctx || !this.canvas) return;
-    this.ctxOps.strokeStyle('black', (v) => this.ctx!.strokeStyle = v);
-    this.ctxOps.lineWidth(1 * window.devicePixelRatio, (v) => this.ctx!.lineWidth = v);
 
-     // render the X and Y axis
-     this.ctxOps.strokeStyle('black', (v) => this.ctx!.strokeStyle = v);
+     // render the X and Y axis grid
+     this.ctxOps.strokeStyle('#e9e7f6', (v) => this.ctx!.strokeStyle = v);
      this.ctxOps.lineWidth(1 * window.devicePixelRatio, (v) => this.ctx!.lineWidth = v);
+
+     this.ctxOps.fillStyle('black', (v) => this.ctx!.fillStyle = v);
+     this.ctxOps.font(`${10 * window.devicePixelRatio}px monospace`, (v) => this.ctx!.font = v);
+
+     const targetX = vec2.fromValues(100 * window.devicePixelRatio, this.view[2]);
+     const targetXInterval = vec2.transformMat3(vec2.create(), targetX, mat3.invert(mat3.create(), this.viewProjectionMatrix))[0] - this.view[0];
+
+     const minIntervalX = Math.pow(10, Math.floor(Math.log10(targetXInterval)));
+     let intervalX = minIntervalX;
+   
+     if (targetXInterval / intervalX > 10) {
+       intervalX *= 10;
+     } else if (targetXInterval / intervalX > 5) {
+       intervalX *= 5;
+     } else if (targetXInterval / intervalX > 2) {
+       intervalX *= 3;
+     }
+   
+     let x = Math.ceil(this.view[0] / intervalX) * intervalX;
+     const intervals: number[] = [];
+   
+     while (x <= this.view[0] + this.view[2]) {
+       intervals.push(x);
+       x += intervalX;
+     }
+
+    for (const interval of intervals) {
+      // Compute the x position of our interval from config space to physical
+      const physicalIntervalPosition = Math.round(
+        interval * this.viewProjectionMatrix[0] + this.viewProjectionMatrix[6]
+      );
+
+      this.ctx.beginPath();
+      this.ctxOps.strokeStyle('#e9e7f6', (v) => this.ctx!.strokeStyle = v);
+      this.ctx.moveTo(physicalIntervalPosition, 0);
+      this.ctx.lineTo(physicalIntervalPosition, this.canvas.height);
+      this.ctx.stroke();
+      this.ctx.fillText(interval.toFixed(2).replace('.00', ''), physicalIntervalPosition, this.canvas.height - 10);
+    }
+
+     const targetY = vec2.fromValues(0, 20 * window.devicePixelRatio);
+     const targetYInterval = vec2.transformMat3(vec2.create(), targetY, mat3.invert(mat3.create(), this.viewProjectionMatrix))[1] - this.view[1];
+
+     const minIntervalY = Math.pow(10, Math.floor(Math.log10(targetYInterval)));
+     let intervalY = minIntervalY;
+
+     if(targetYInterval / intervalY < 5) {
+      intervalY /= 3;
+     }
+   
+     let y = Math.ceil(this.view[1] / intervalY) * intervalY;
+     const intervalsY: number[] = [];
+   
+     while (y <= this.view[1] + this.view[3]) {
+       intervalsY.push(y);
+       y += intervalY;
+     }
+
+      for (const interval of intervalsY) {
+        // Compute the x position of our interval from config space to physical
+        const physicalIntervalPosition = Math.round(
+          interval * this.viewProjectionMatrix[4] + this.viewProjectionMatrix[7]
+        );
+
+        this.ctx.beginPath();
+        this.ctxOps.strokeStyle('#e9e7f6', (v) => this.ctx!.strokeStyle = v);
+        this.ctx.moveTo(0, physicalIntervalPosition);
+        this.ctx.lineTo(this.canvas.width, physicalIntervalPosition);
+        this.ctx.stroke();
+        this.ctx.fillText(interval.toFixed(2).replace('.00', ''), 0, physicalIntervalPosition);
+      }
  
      const origin = vec2.fromValues(0,0)
      const xEnd = vec2.fromValues(this.domain[2], 0)
@@ -272,29 +360,37 @@ class Flamegraph {
       const max = Math.min(this.data.length, binarySearchIndex(this.data, this.view[0] + this.view[2]) + 1);
 
       this.ctxOps.lineWidth(1 * window.devicePixelRatio, (v) => this.ctx!.lineWidth = v);
-      this.ctxOps.strokeStyle('blue', (v) => this.ctx!.strokeStyle = v);
+      this.ctxOps.strokeStyle('#7553ff', (v) => this.ctx!.strokeStyle = v);
       this.ctx.beginPath();
 
-      for(let i = min; i < max; i++) {
+      let sid = min
+      let eid = min;
+      while(eid <= max && this.data[eid] && this.data[eid].x - this.data[sid].x <= pxInConfigSpace[0]) {
+        eid++;
+      }
+
+      let step = eid - sid;
+
+      for(let i = min; i < max; i += step) {
         let x = this.data[i].x;
-        let maxY = this.data[i].y;
+        let y = this.data[i].y;
+        // let maxY = this.data[i].y;
 
-        let e = i;
+        // let e = i;
 
-        while(e < max && this.data[e].x - this.data[i].x <= pxInConfigSpace[0]) {
-          if (this.data[e].y > maxY) {
-            maxY = this.data[e].y;
-          }
-          e++;
-        }
+        // while(e < max && this.data[e].x - this.data[i].x <= pxInConfigSpace[0]) {
+        //   if (this.data[e].y > maxY) {
+        //     maxY = this.data[e].y;
+        //   }
+        //   e++;
+        // }
         
-        let y = maxY;
+        // let y = maxY;
 
         let xConfig = this.viewProjectionMatrix[6] + this.viewProjectionMatrix[0] * x;
         let yConfig = this.viewProjectionMatrix[7] + this.viewProjectionMatrix[4] * y; 
         this.ctx.lineTo(xConfig, yConfig);
-
-        i = e - 1;
+        // i = e - 1;
       }
 
       this.ctx.stroke();
@@ -314,18 +410,6 @@ class Flamegraph {
   }
 }
 
-class GridRenderer {
-  ctx: CanvasRenderingContext2D
-  constructor(ctx: CanvasRenderingContext2D) {
-    this.ctx = ctx;
-  }
-  
-  render() {
-    this.ctx.strokeStyle = 'black';
-    this.ctx.lineWidth = 1 * window.devicePixelRatio;
-  }
-}
-
 class TextRenderer {
   ctx: CanvasRenderingContext2D
   constructor(ctx: CanvasRenderingContext2D) {
@@ -333,9 +417,6 @@ class TextRenderer {
   }
 
   render(text: string, x: number, y: number) {
-    this.ctx.fillStyle = 'black';
-    this.ctx.font = '12px monospace';
-    this.ctx.fillText(text, x, y);
   }
 }
 
@@ -376,12 +457,85 @@ function App() {
 
   document.body.style.overscrollBehavior = 'none';
 
+  function drawCrosshair(position: vec2 | null) {
+    if(!flamegraph.current || !position) return;
+
+    const index = binarySearchIndex(flamegraph.current.data, position[0]);
+    const data = flamegraph.current.data[index];
+      position[1] = data.y; 
+      // @TODO label on left side
+      const physicalPosition = vec2.transformMat3(vec2.create(), position, flamegraph.current.viewProjectionMatrix);
+      
+      // Clear the overlay
+      flamegraph.current.overlayCtx?.clearRect(
+        0, 0,
+        flamegraph.current.overlayCanvas!.width,
+        flamegraph.current.overlayCanvas!.height
+      );
+
+      // Draw a crosshair at the cursor position
+      if (flamegraph.current.overlayCtx && flamegraph.current.overlayCanvas) {
+
+        flamegraph.current.overlayCtx.save();
+        flamegraph.current.overlayCtx.strokeStyle = '#b0acbf';
+        flamegraph.current.overlayCtx.lineWidth = 1 * window.devicePixelRatio;
+
+        // Draw vertical line
+        flamegraph.current.overlayCtx.beginPath();
+        flamegraph.current.overlayCtx.moveTo(physicalPosition[0], 0);
+        flamegraph.current.overlayCtx.lineTo(physicalPosition[0], flamegraph.current.overlayCanvas.height);
+        flamegraph.current.overlayCtx.stroke();
+
+        // Draw horizontal line
+        flamegraph.current.overlayCtx.beginPath();
+        flamegraph.current.overlayCtx.moveTo(0, physicalPosition[1]);
+        flamegraph.current.overlayCtx.lineTo(flamegraph.current.overlayCanvas.width, physicalPosition[1]);
+        flamegraph.current.overlayCtx.stroke();
+
+        if(data) {
+          const ctx = flamegraph.current.overlayCtx;
+        // Transform the data point to physical (screen) coordinates
+        const dataPhysical = vec2.transformMat3(
+          vec2.create(),
+          [data.x, data.y],
+          flamegraph.current.viewProjectionMatrix
+        );
+        ctx.save();
+        ctx.beginPath();
+        ctx.fillStyle = '#5631ee';
+        ctx.arc(dataPhysical[0], dataPhysical[1], 3 * window.devicePixelRatio, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.restore();
+
+        ctx.beginPath();
+        ctx.moveTo(0, dataPhysical[1]);
+        ctx.lineTo(flamegraph.current.overlayCanvas!.width, dataPhysical[1]);
+        ctx.stroke();
+        
+        const fontMeasures = ctx.measureText(data.y.toFixed(2).replace('.00', ''));
+        ctx.rect(0, dataPhysical[1] - 18 * window.devicePixelRatio, fontMeasures.width, fontMeasures.fontBoundingBoxAscent + 14);
+        ctx.fillStyle = '#5631ee';
+        ctx.fill();
+
+        ctx.fillStyle = '#fff';
+        ctx.font = `${10 * window.devicePixelRatio}px monospace`;
+        ctx.fillText(data.y.toFixed(2).replace('.00', ''), 0, dataPhysical[1] + 10 * window.devicePixelRatio - 16 * window.devicePixelRatio);
+        }
+      }
+  }
+
   const canvasCallbackRef = useCallback((canvas: HTMLCanvasElement) => {
     if (canvas) {
       flamegraph.current = new Flamegraph(canvas);
 
       canvas.addEventListener('wheel', (e) => {
         if(!flamegraph.current) return;
+
+        flamegraph.current.overlayCtx?.clearRect(
+          0, 0,
+          flamegraph.current.overlayCanvas!.width,
+          flamegraph.current.overlayCanvas!.height
+        );
         
         if(e.metaKey || e.shiftKey) {
           const rect = e.currentTarget.getBoundingClientRect();
@@ -413,8 +567,9 @@ function App() {
 
           flamegraph.current.transformView(centerScale);
           flamegraph.current.render();
+          drawCrosshair(cursorPosition);
         } else {
-          const physicalDelta = vec2.fromValues(e.deltaX * 0.005, e.deltaY * 0.005);
+          const physicalDelta = vec2.fromValues(e.deltaX, e.deltaY);
           const physicalToConfig = mat3.invert(
             mat3.create(),
             flamegraph.current.viewProjectionMatrix
@@ -438,17 +593,20 @@ function App() {
           const shouldCheckLeft = e.deltaX < 0 && Math.abs(e.deltaX) > Math.abs(e.deltaY);
           const shouldCheckRight = e.deltaX > 0 && Math.abs(e.deltaX) > Math.abs(e.deltaY);
 
+          let y: number | null = null;
           if(shouldCheckLeft){
             const firstLeft = binarySearchIndex(flamegraph.current.data, flamegraph.current.view[0]);
             const leftY = flamegraph.current.data[firstLeft].y;
             if(leftY < flamegraph.current.view[1]){
               // left is below view
               flamegraph.current.setView([flamegraph.current.view[0], leftY, flamegraph.current.view[2], flamegraph.current.view[3]]);
+              y = leftY;
             } else if(
               leftY > flamegraph.current.view[1] + flamegraph.current.view[3]
             ){
               // left is above view
               flamegraph.current.setView([flamegraph.current.view[0], leftY - flamegraph.current.view[3], flamegraph.current.view[2], flamegraph.current.view[3]]);
+              y = leftY - flamegraph.current.view[3];
             }
           } else if(shouldCheckRight){
             const firstRight = binarySearchIndex(flamegraph.current.data, flamegraph.current.view[0] + flamegraph.current.view[2]); 
@@ -456,17 +614,29 @@ function App() {
             if(rightY > flamegraph.current.view[1] + flamegraph.current.view[3]){
               // right is above view
               flamegraph.current.setView([flamegraph.current.view[0], rightY - flamegraph.current.view[3], flamegraph.current.view[2], flamegraph.current.view[3]]);
+              y = rightY - flamegraph.current.view[3];
             } else if(rightY < flamegraph.current.view[1]){
               // right is below view
-              flamegraph.current.setView([flamegraph.current.view[0], rightY, flamegraph.current.view[2], flamegraph.current.view[3]]);
+              flamegraph.current.setView([flamegraph.current.view[0], rightY, flamegraph.current.view[2], flamegraph.current.view[3]]); 
+              y = rightY;
             }
           }
+
+            if(Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+              if(e.deltaX > 0) {
+                drawCrosshair(vec2.fromValues(flamegraph.current.view[0] + flamegraph.current.view[2], y ?? 0));
+              } else if(e.deltaX < 0) {
+                drawCrosshair(vec2.fromValues(flamegraph.current.view[0], y ?? 0));
+              }
+            } 
+
           flamegraph.current.render();
         }
 
         if(viewRef.current) {
           viewRef.current.innerText = `View: ${flamegraph.current?.view.map(v => v.toFixed(1)).join(', ')}
-          Domain: ${flamegraph.current?.domain.map(v => v.toFixed(1)).join(', ')}`;
+          Domain: ${flamegraph.current?.domain.map(v => v.toFixed(1)).join(', ')}
+          N: ${(flamegraph.current?.data.length ?? 0).toExponential()}`;
         }
       });
     }
@@ -479,6 +649,7 @@ function App() {
     const position = flamegraph.current.getCursorPosition(e.clientX - rect.left, e.clientY - rect.top);
     if(!position) cursorRef.current.innerText = 'Cursor: <failed to compute>';
     else cursorRef.current.innerText = `Cursor: ${position[0].toFixed(1)}, ${position[1].toFixed(1)}`;
+    drawCrosshair(position);
   }
 
   const onCanvasMouseLeave = () => {
@@ -522,7 +693,8 @@ function App() {
 
   if(viewRef.current) {
     viewRef.current.innerText = `View: ${flamegraph.current?.view.map(v => v.toFixed(1)).join(', ')}
-    domain: ${flamegraph.current?.domain.map(v => v.toFixed(1)).join(', ')}`;
+    domain: ${flamegraph.current?.domain.map(v => v.toFixed(1)).join(', ')}
+    N: ${flamegraph.current?.data.length}`;
   }
 
   const [_, rerender] = useState(0);
@@ -550,7 +722,7 @@ function App() {
         onMouseUp={onCanvasMouseUp}
         />
       </div>
-      <button onClick={() => {
+      {/* <button onClick={() => {
         if(!flamegraph.current) return;
         flamegraph.current.transformView(mat3.fromValues(
           1, 0, 0,
@@ -652,7 +824,7 @@ function App() {
         flamegraph.current.transformView(centerScale);
         flamegraph.current.render();
         rerender((prev) => prev + 1);
-      }}>- scale x</button>
+      }}>- scale x</button> */}
       
       
       <div style={{
@@ -668,7 +840,7 @@ function App() {
         whiteSpace:'nowrap',
         padding: 8,
         }}>
-          Debug Tools:
+          Debug Tools
           <div ref={cursorRef}/>
           <div ref={viewRef}/>
       </div>
