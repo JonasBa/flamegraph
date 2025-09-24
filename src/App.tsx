@@ -4,7 +4,7 @@ import { useRef } from 'react';
 import { mat3, vec2 } from 'gl-matrix';
 
 function generateRandomWalkData(length: number, startValue: number = 50): { x: number, y: number }[] {
-  const data: { x: number, y: number }[] = new Array(length);
+  const data: { x: number, y: number }[] = [];
   let currentY = startValue;
   
   // Start from current timestamp and increment by microseconds for high frequency data
@@ -13,7 +13,7 @@ function generateRandomWalkData(length: number, startValue: number = 50): { x: n
   
   for (let i = 0; i < length; i++) {
     currentY = Math.max(1, currentY + (Math.random() - 0.5) * 0.5);
-    data[i] = { x: startTimestamp + (i * microsecondsIncrement / 1000), y: currentY };
+    data.push({ x: startTimestamp + (i * microsecondsIncrement / 1000), y: currentY });
   }
   
   return data;
@@ -84,7 +84,7 @@ class Flamegraph {
     this.textRenderer = new TextRenderer(this.ctx);
     this.textMeasurer = new TextMeasurer(this.ctx);
 
-    this.data = generateRandomWalkData(40 * 1e6);
+    this.data = generateRandomWalkData(1 * 1e6);
 
     let maxY = Number.NEGATIVE_INFINITY;
     let minY = Number.POSITIVE_INFINITY;
@@ -359,41 +359,66 @@ class Flamegraph {
       const min = Math.max(0, binarySearchIndex(this.data, this.view[0]) - 1);
       const max = Math.min(this.data.length, binarySearchIndex(this.data, this.view[0] + this.view[2]) + 1);
 
+      
       this.ctxOps.lineWidth(1 * window.devicePixelRatio, (v) => this.ctx!.lineWidth = v);
       this.ctxOps.strokeStyle('#7553ff', (v) => this.ctx!.strokeStyle = v);
       this.ctx.beginPath();
-
-      let sid = min
-      let eid = min;
-      while(eid <= max && this.data[eid] && this.data[eid].x - this.data[sid].x <= pxInConfigSpace[0]) {
-        eid++;
-      }
-
-      let step = eid - sid;
-
-      for(let i = min; i < max; i += step) {
+      
+      for(let i = min; i < max; i++) {
         let x = this.data[i].x;
-        let y = this.data[i].y;
-        // let maxY = this.data[i].y;
-
-        // let e = i;
-
-        // while(e < max && this.data[e].x - this.data[i].x <= pxInConfigSpace[0]) {
-        //   if (this.data[e].y > maxY) {
-        //     maxY = this.data[e].y;
-        //   }
-        //   e++;
-        // }
+        let maxY = this.data[i].y;
         
-        // let y = maxY;
-
+        let e = i;
+        
+        while(e < max && this.data[e].x - this.data[i].x <= pxInConfigSpace[0]) {
+          if (this.data[e].y > maxY) {
+            maxY = this.data[e].y;
+          }
+          e++;
+        }
+        
         let xConfig = this.viewProjectionMatrix[6] + this.viewProjectionMatrix[0] * x;
-        let yConfig = this.viewProjectionMatrix[7] + this.viewProjectionMatrix[4] * y; 
+        let yConfig = this.viewProjectionMatrix[7] + this.viewProjectionMatrix[4] * maxY; 
         this.ctx.lineTo(xConfig, yConfig);
-        // i = e - 1;
+        
+        i = e - 1;
       }
-
       this.ctx.stroke();
+      this.ctx.closePath();
+      
+      const circleRadius = 10 * window.devicePixelRatio;
+      const drawCircleRadius = (this.data[1].x - this.data[0].x) > pxInConfigSpace[0] * circleRadius / 4;
+      
+      if(drawCircleRadius) {
+        this.ctx.beginPath();
+        this.ctxOps.lineWidth(1 * window.devicePixelRatio, (v) => this.ctx!.lineWidth = v);
+        this.ctxOps.strokeStyle('#7553ff', (v) => this.ctx!.strokeStyle = v);
+        this.ctxOps.fillStyle('#7553ff', (v) => this.ctx!.fillStyle = v);
+
+        for(let i = min; i < max; i++) {
+          let x = this.data[i].x;
+          let maxY = this.data[i].y;
+
+          let e = i;
+          
+          while(e < max && this.data[e].x - this.data[i].x <= pxInConfigSpace[0]) {
+            if (this.data[e].y > maxY) {
+              maxY = this.data[e].y;
+            }
+            e++;
+          }
+
+          let xConfig = this.viewProjectionMatrix[6] + this.viewProjectionMatrix[0] * x;
+          let yConfig = this.viewProjectionMatrix[7] + this.viewProjectionMatrix[4] * maxY; 
+
+          this.ctx.moveTo(xConfig, yConfig);
+          this.ctx.arc(xConfig, yConfig, 2 * window.devicePixelRatio, 0, 2 * Math.PI);
+          
+          i = e - 1;
+        }
+        this.ctx.fill();
+        this.ctx.closePath();
+      }
     });
   }
 
@@ -461,7 +486,14 @@ function App() {
     if(!flamegraph.current || !position) return;
 
     const index = binarySearchIndex(flamegraph.current.data, position[0]);
-    const data = flamegraph.current.data[index];
+    let data = flamegraph.current.data[index];
+      // Check if data at index-1 is closer to position[0] in x
+      const prev = flamegraph.current.data[index - 1] ?? null;
+      if (prev && Math.abs(prev.x - position[0]) < Math.abs(data.x - position[0])) {
+        data = prev;
+      }
+
+
       position[1] = data.y; 
       // @TODO label on left side
       const physicalPosition = vec2.transformMat3(vec2.create(), position, flamegraph.current.viewProjectionMatrix);
@@ -500,13 +532,7 @@ function App() {
           [data.x, data.y],
           flamegraph.current.viewProjectionMatrix
         );
-        ctx.save();
-        ctx.beginPath();
-        ctx.fillStyle = '#5631ee';
-        ctx.arc(dataPhysical[0], dataPhysical[1], 3 * window.devicePixelRatio, 0, 2 * Math.PI);
-        ctx.fill();
-        ctx.restore();
-
+        
         ctx.beginPath();
         ctx.moveTo(0, dataPhysical[1]);
         ctx.lineTo(flamegraph.current.overlayCanvas!.width, dataPhysical[1]);
@@ -516,6 +542,13 @@ function App() {
         ctx.rect(0, dataPhysical[1] - 18 * window.devicePixelRatio, fontMeasures.width, fontMeasures.fontBoundingBoxAscent + 14);
         ctx.fillStyle = '#5631ee';
         ctx.fill();
+        
+        ctx.save();
+        ctx.beginPath();
+        ctx.fillStyle = '#5631ee';
+        ctx.arc(dataPhysical[0], dataPhysical[1], 3 * window.devicePixelRatio, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.restore();
 
         ctx.fillStyle = '#fff';
         ctx.font = `${10 * window.devicePixelRatio}px monospace`;
